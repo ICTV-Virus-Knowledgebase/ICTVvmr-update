@@ -20,7 +20,6 @@ seg_MSA1/
 VMR/
 *.fa
 *.fasta
-*.sh
 *.csv
 *.xlsx
 *.npy
