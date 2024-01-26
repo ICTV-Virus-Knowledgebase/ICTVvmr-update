@@ -1,3 +1,9 @@
+# editor files
+\#*
+*~
+# conda environments
+conda/
+# Blast DB files
 *.ndb
 *.nhr
 *.nin
@@ -5,29 +11,10 @@
 *.nsq
 *.ntf
 *.nto
-output/results.out
-blast/
-fasta/
-fasta_new_vmr/
-Genus_MSA/
-Input_MSA/
-MSA_test/
-output/
-Output_MSA/
-query/
-seg_MSA/
-seg_MSA1/
-VMR/
+# downloaded fasta
 *.fa
-*.fasta
-*.csv
-*.xlsx
-*.npy
-*.err
-*.out
-*.txt
-*.sqlite
-*.sql
-*.xml
-*.allfa
-*.msa
+# blast results
+results/*/**.csv
+# SLuRM files
+logs
+log.*
