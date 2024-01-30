@@ -18,3 +18,9 @@ results/*/**.csv
 # SLuRM files
 logs
 log.*
+fasta_new_vmr_a
+fasta_new_vmr
+results/*/*
+results/.merge*
+blast
+nohup.out
