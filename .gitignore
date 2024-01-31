@@ -24,3 +24,6 @@ results/*/*
 results/.merge*
 blast
 nohup.out
+# temp files
+fixed_vmr_e.tsv
+
