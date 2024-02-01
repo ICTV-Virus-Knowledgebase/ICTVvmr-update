@@ -1,8 +1,19 @@
 # editor files
 \#*
 *~
-# conda environments
-conda/
+# temp files
+nohup.out
+.run_pipeline_for_new_msl.email.txt
+##
+## cache dirs
+##
+VMRs/
+# blast results
+results/*/**.csv
+results/*/*
+results/.merge*
+# blast DB
+blast/
 # Blast DB files
 *.ndb
 *.nhr
@@ -11,20 +22,12 @@ conda/
 *.nsq
 *.ntf
 *.nto
+# SLuRM files
+logs/
+log.*
+# conda environments
+conda/
 # downloaded fasta
 *.fa
-# blast results
-results/*/**.csv
-# SLuRM files
-logs
-log.*
-fasta_new_vmr_a
-fasta_new_vmr
-results/*/*
-results/.merge*
-blast
-nohup.out
-# temp files
-fixed_vmr_e.tsv
-
-.run_pipeline_for_new_msl.email.txt
+fasta_new_vmr_a/
+fasta_new_vmr/
