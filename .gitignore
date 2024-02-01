@@ -27,3 +27,4 @@ nohup.out
 # temp files
 fixed_vmr_e.tsv
 
+.run_pipeline_for_new_msl.email.txt
