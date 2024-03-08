@@ -1,3 +1,5 @@
+# version with git hash added - created as part of release process
+version_git.txt
 # editor files
 \#*
 *~
