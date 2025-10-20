@@ -1,0 +1,285 @@
+#!/usr/bin/env python3
+"""Command-line tool to diff two XLSX workbooks with colored output."""
+from __future__ import annotations
+
+import argparse
+import sys
+from collections import defaultdict
+from dataclasses import dataclass
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+
+from openpyxl import load_workbook
+from openpyxl.cell import Cell
+from openpyxl.utils import get_column_letter
+
+# ANSI color helpers
+RED = "\033[31m"
+GREEN = "\033[32m"
+YELLOW = "\033[33m"
+BOLD = "\033[1m"
+RESET = "\033[0m"
+
+
+@dataclass(frozen=True)
+class CellDiff:
+    row: int
+    column: int
+    old_value: Optional[str]
+    new_value: Optional[str]
+
+
+@dataclass(frozen=True)
+class CellFormatDiff:
+    row: int
+    column: int
+    changes: Dict[str, Tuple[str, str]]
+
+
+@dataclass(frozen=True)
+class ConditionalFormatDiff:
+    description: str
+    old_rules: Sequence[str]
+    new_rules: Sequence[str]
+
+
+def parse_args(argv: Sequence[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        prog="xlsx_diff",
+        description="Show a colored diff between two XLSX workbooks.",
+    )
+    parser.add_argument("old", help="Path to the original workbook")
+    parser.add_argument("new", help="Path to the updated workbook")
+    parser.add_argument(
+        "--no-formatting",
+        action="store_true",
+        help="Suppress reporting of formatting and conditional formatting differences",
+    )
+    parser.add_argument(
+        "--by-cell",
+        action="store_true",
+        help="Display each changed cell on its own line",
+    )
+    return parser.parse_args(argv)
+
+
+def load_workbook_safe(path: str):
+    try:
+        return load_workbook(path, data_only=False, read_only=False)
+    except FileNotFoundError:
+        print(f"Unable to open workbook: {path}", file=sys.stderr)
+        sys.exit(2)
+
+
+def display_value(cell: Cell) -> Optional[str]:
+    value = cell.value
+    if value is None:
+        return None
+    if cell.data_type == "f" or (isinstance(value, str) and value.startswith("=")):
+        return str(value)
+    return repr(value) if not isinstance(value, str) else value
+
+
+def style_components(cell: Cell) -> Dict[str, str]:
+    components = {
+        "font": cell.font,
+        "fill": cell.fill,
+        "border": cell.border,
+        "alignment": cell.alignment,
+        "number_format": cell.number_format,
+        "protection": cell.protection,
+    }
+    rendered: Dict[str, str] = {}
+    for key, component in components.items():
+        if key == "number_format":
+            rendered[key] = str(component)
+        else:
+            rendered[key] = repr(component)
+    return rendered
+
+
+def diff_styles(old: Cell, new: Cell) -> Optional[CellFormatDiff]:
+    old_style = style_components(old)
+    new_style = style_components(new)
+    changes: Dict[str, Tuple[str, str]] = {}
+    for key in old_style.keys():
+        if old_style[key] != new_style[key]:
+            changes[key] = (old_style[key], new_style[key])
+    if not changes:
+        return None
+    return CellFormatDiff(row=old.row, column=old.column, changes=changes)
+
+
+def iter_all_cells(ws) -> Iterable[Cell]:
+    max_row = ws.max_row or 0
+    max_col = ws.max_column or 0
+    for row in ws.iter_rows(min_row=1, max_row=max_row, min_col=1, max_col=max_col):
+        for cell in row:
+            yield cell
+
+
+def build_cell_map(ws) -> Dict[Tuple[int, int], Cell]:
+    return {(cell.row, cell.column): cell for cell in iter_all_cells(ws)}
+
+
+def diff_cells(old_ws, new_ws) -> Tuple[List[CellDiff], List[CellFormatDiff]]:
+    old_cells = build_cell_map(old_ws)
+    new_cells = build_cell_map(new_ws)
+    all_coords = set(old_cells.keys()) | set(new_cells.keys())
+    value_diffs: List[CellDiff] = []
+    format_diffs: List[CellFormatDiff] = []
+    for coord in sorted(all_coords):
+        old_cell = old_cells.get(coord)
+        new_cell = new_cells.get(coord)
+        if old_cell is None:
+            old_display = None
+        else:
+            old_display = display_value(old_cell)
+        if new_cell is None:
+            new_display = None
+        else:
+            new_display = display_value(new_cell)
+        if old_display != new_display:
+            value_diffs.append(
+                CellDiff(
+                    row=coord[0],
+                    column=coord[1],
+                    old_value=old_display,
+                    new_value=new_display,
+                )
+            )
+        if old_cell is None or new_cell is None:
+            continue
+        format_diff = diff_styles(old_cell, new_cell)
+        if format_diff:
+            format_diffs.append(format_diff)
+    return value_diffs, format_diffs
+
+
+def describe_conditional_formatting(ws) -> Dict[str, List[str]]:
+    cf_map: Dict[str, List[str]] = {}
+    for cf_range in ws.conditional_formatting:
+        rules = ws.conditional_formatting[cf_range]
+        cf_map[cf_range] = [repr(rule) for rule in rules]
+    return cf_map
+
+
+def diff_conditional_formatting(old_ws, new_ws) -> List[ConditionalFormatDiff]:
+    old_cf = describe_conditional_formatting(old_ws)
+    new_cf = describe_conditional_formatting(new_ws)
+    all_ranges = set(old_cf.keys()) | set(new_cf.keys())
+    diffs: List[ConditionalFormatDiff] = []
+    for cf_range in sorted(all_ranges):
+        old_rules = old_cf.get(cf_range, [])
+        new_rules = new_cf.get(cf_range, [])
+        if old_rules != new_rules:
+            diffs.append(
+                ConditionalFormatDiff(
+                    description=cf_range,
+                    old_rules=old_rules,
+                    new_rules=new_rules,
+                )
+            )
+    return diffs
+
+
+def format_cell_coordinate(row: int, column: int) -> str:
+    return f"{get_column_letter(column)}{row}"
+
+
+def print_value_diffs(sheet_name: str, diffs: List[CellDiff], *, by_cell: bool) -> None:
+    if not diffs:
+        return
+    print(f"{BOLD}Worksheet: {sheet_name}{RESET}")
+    if by_cell:
+        for diff in diffs:
+            coord = format_cell_coordinate(diff.row, diff.column)
+            old = f"{RED}{diff.old_value}{RESET}" if diff.old_value is not None else f"{RED}<empty>{RESET}"
+            new = f"{GREEN}{diff.new_value}{RESET}" if diff.new_value is not None else f"{GREEN}<empty>{RESET}"
+            print(f"  {coord}: {old} -> {new}")
+    else:
+        rows: Dict[int, List[CellDiff]] = defaultdict(list)
+        for diff in diffs:
+            rows[diff.row].append(diff)
+        for row_index in sorted(rows):
+            entries = []
+            for diff in sorted(rows[row_index], key=lambda d: d.column):
+                coord = get_column_letter(diff.column)
+                old = (
+                    f"{RED}{diff.old_value}{RESET}" if diff.old_value is not None else f"{RED}<empty>{RESET}"
+                )
+                new = (
+                    f"{GREEN}{diff.new_value}{RESET}" if diff.new_value is not None else f"{GREEN}<empty>{RESET}"
+                )
+                entries.append(f"{coord}: {old} -> {new}")
+            print(f"  Row {row_index}: " + ", ".join(entries))
+    print()
+
+
+def print_format_diffs(sheet_name: str, diffs: List[CellFormatDiff]) -> None:
+    if not diffs:
+        return
+    print(f"{BOLD}Formatting differences for worksheet: {sheet_name}{RESET}")
+    for diff in diffs:
+        coord = format_cell_coordinate(diff.row, diff.column)
+        print(f"  {coord}:")
+        for key, (old, new) in sorted(diff.changes.items()):
+            print(f"    {key}: {RED}{old}{RESET} -> {GREEN}{new}{RESET}")
+    print()
+
+
+def print_conditional_diffs(sheet_name: str, diffs: List[ConditionalFormatDiff]) -> None:
+    if not diffs:
+        return
+    print(f"{BOLD}Conditional formatting differences for worksheet: {sheet_name}{RESET}")
+    for diff in diffs:
+        print(f"  Range {diff.description}:")
+        old_desc = "\n      ".join(diff.old_rules) if diff.old_rules else "<none>"
+        new_desc = "\n      ".join(diff.new_rules) if diff.new_rules else "<none>"
+        print(f"    Old: {RED}{old_desc}{RESET}")
+        print(f"    New: {GREEN}{new_desc}{RESET}")
+    print()
+
+
+def report_missing_or_new_sheets(old_only: Sequence[str], new_only: Sequence[str]) -> None:
+    if old_only:
+        print(f"{YELLOW}Worksheets only in old workbook: {', '.join(old_only)}{RESET}")
+    if new_only:
+        print(f"{YELLOW}Worksheets only in new workbook: {', '.join(new_only)}{RESET}")
+    if old_only or new_only:
+        print()
+
+
+def main(argv: Sequence[str]) -> int:
+    args = parse_args(argv)
+    old_wb = load_workbook_safe(args.old)
+    new_wb = load_workbook_safe(args.new)
+
+    old_sheets = set(old_wb.sheetnames)
+    new_sheets = set(new_wb.sheetnames)
+    report_missing_or_new_sheets(
+        sorted(old_sheets - new_sheets), sorted(new_sheets - old_sheets)
+    )
+
+    common_sheets = sorted(old_sheets & new_sheets)
+    any_diffs = False
+    for sheet_name in common_sheets:
+        old_ws = old_wb[sheet_name]
+        new_ws = new_wb[sheet_name]
+        value_diffs, format_diffs = diff_cells(old_ws, new_ws)
+        cond_diffs: List[ConditionalFormatDiff] = []
+        if not args.no_formatting:
+            cond_diffs = diff_conditional_formatting(old_ws, new_ws)
+        if value_diffs:
+            any_diffs = True
+            print_value_diffs(sheet_name, value_diffs, by_cell=args.by_cell)
+        if not args.no_formatting and (format_diffs or cond_diffs):
+            any_diffs = True
+            print_format_diffs(sheet_name, format_diffs)
+            print_conditional_diffs(sheet_name, cond_diffs)
+    if not any_diffs:
+        print("No differences found.")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
