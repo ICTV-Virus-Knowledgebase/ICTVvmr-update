@@ -6,7 +6,8 @@ import argparse
 import sys
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from itertools import zip_longest
+from typing import Dict, List, Optional, Sequence, Tuple
 
 from openpyxl import load_workbook
 from openpyxl.cell import Cell
@@ -79,46 +80,32 @@ def display_value(cell: Cell) -> Optional[str]:
     return repr(value) if not isinstance(value, str) else value
 
 
-def style_components(cell: Cell) -> Dict[str, str]:
-    components = {
-        "font": cell.font,
-        "fill": cell.fill,
-        "border": cell.border,
-        "alignment": cell.alignment,
-        "number_format": cell.number_format,
-        "protection": cell.protection,
-    }
-    rendered: Dict[str, str] = {}
-    for key, component in components.items():
-        if key == "number_format":
-            rendered[key] = str(component)
-        else:
-            rendered[key] = repr(component)
-    return rendered
+STYLE_ATTRIBUTES: Tuple[str, ...] = (
+    "font",
+    "fill",
+    "border",
+    "alignment",
+    "number_format",
+    "protection",
+)
 
 
 def diff_styles(old: Cell, new: Cell) -> Optional[CellFormatDiff]:
-    old_style = style_components(old)
-    new_style = style_components(new)
     changes: Dict[str, Tuple[str, str]] = {}
-    for key in old_style.keys():
-        if old_style[key] != new_style[key]:
-            changes[key] = (old_style[key], new_style[key])
+    for attr in STYLE_ATTRIBUTES:
+        old_component = getattr(old, attr)
+        new_component = getattr(new, attr)
+        if old_component != new_component:
+            if attr == "number_format":
+                old_desc = str(old_component)
+                new_desc = str(new_component)
+            else:
+                old_desc = repr(old_component)
+                new_desc = repr(new_component)
+            changes[attr] = (old_desc, new_desc)
     if not changes:
         return None
     return CellFormatDiff(row=old.row, column=old.column, changes=changes)
-
-
-def iter_all_cells(ws) -> Iterable[Cell]:
-    max_row = ws.max_row or 0
-    max_col = ws.max_column or 0
-    for row in ws.iter_rows(min_row=1, max_row=max_row, min_col=1, max_col=max_col):
-        for cell in row:
-            yield cell
-
-
-def build_cell_map(ws) -> Dict[Tuple[int, int], Cell]:
-    return {(cell.row, cell.column): cell for cell in iter_all_cells(ws)}
 
 
 def diff_cells(
@@ -127,35 +114,70 @@ def diff_cells(
     *,
     include_formatting: bool = True,
 ) -> Tuple[List[CellDiff], List[CellFormatDiff]]:
-    old_cells = build_cell_map(old_ws)
-    new_cells = build_cell_map(new_ws)
-    all_coords = set(old_cells.keys()) | set(new_cells.keys())
+    old_max_row = old_ws.max_row or 0
+    new_max_row = new_ws.max_row or 0
+    old_max_col = old_ws.max_column or 0
+    new_max_col = new_ws.max_column or 0
+    max_row = max(old_max_row, new_max_row)
+    max_col = max(old_max_col, new_max_col)
+
+    if max_row == 0 or max_col == 0:
+        return [], []
+
+    old_rows = old_ws.iter_rows(
+        min_row=1,
+        max_row=max_row,
+        min_col=1,
+        max_col=max_col,
+    )
+    new_rows = new_ws.iter_rows(
+        min_row=1,
+        max_row=max_row,
+        min_col=1,
+        max_col=max_col,
+    )
+
     value_diffs: List[CellDiff] = []
     format_diffs: List[CellFormatDiff] = []
-    for coord in sorted(all_coords):
-        old_cell = old_cells.get(coord)
-        new_cell = new_cells.get(coord)
-        if old_cell is None:
-            old_display = None
-        else:
-            old_display = display_value(old_cell)
-        if new_cell is None:
-            new_display = None
-        else:
-            new_display = display_value(new_cell)
-        if old_display != new_display:
-            value_diffs.append(
-                CellDiff(
-                    row=coord[0],
-                    column=coord[1],
-                    old_value=old_display,
-                    new_value=new_display,
-                )
-            )
-        if include_formatting and old_cell is not None and new_cell is not None:
-            format_diff = diff_styles(old_cell, new_cell)
-            if format_diff:
-                format_diffs.append(format_diff)
+
+    for row_index in range(1, max_row + 1):
+        try:
+            old_row = next(old_rows)
+        except StopIteration:
+            old_row = ()
+        try:
+            new_row = next(new_rows)
+        except StopIteration:
+            new_row = ()
+
+        for column_index, (old_cell, new_cell) in enumerate(
+            zip_longest(old_row, new_row, fillvalue=None), start=1
+        ):
+            if old_cell is not None and new_cell is not None:
+                same_type = old_cell.data_type == new_cell.data_type
+                same_value = old_cell.value == new_cell.value
+                values_equal = same_type and same_value
+            else:
+                values_equal = False
+
+            if not values_equal:
+                old_display = display_value(old_cell) if old_cell is not None else None
+                new_display = display_value(new_cell) if new_cell is not None else None
+                if old_display != new_display:
+                    value_diffs.append(
+                        CellDiff(
+                            row=row_index,
+                            column=column_index,
+                            old_value=old_display,
+                            new_value=new_display,
+                        )
+                    )
+
+            if include_formatting and old_cell is not None and new_cell is not None:
+                format_diff = diff_styles(old_cell, new_cell)
+                if format_diff:
+                    format_diffs.append(format_diff)
+
     return value_diffs, format_diffs
 
 
