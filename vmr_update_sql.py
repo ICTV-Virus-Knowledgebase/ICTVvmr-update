@@ -1408,6 +1408,30 @@ def build_insert_sql_text(
         lines.append("    " + ",\n    ".join(values))
         lines.append(");")
         lines.append("")
+    lines.extend(
+        [
+            "--",
+            "-- update inserted species taxnode_id",
+            "-- based on species_name",
+            "--",
+            "",
+            "UPDATE species_isolates si SET",
+            "        taxnode_id=(",
+            "        -- get taxnode_id for latest MSL (support older species names)",
+            "        select taxnode_id",
+            "        from taxonomy_node_names as pt",
+            "        where pt.msl_release_num = (select max(msl_release_num) from taxonomy_toc)",
+            "        and pt.ictv_id = (",
+            "            -- in case of older species name, get ICTV_id",
+            "            select max(pit.ictv_id)",
+            "            from taxonomy_node_names as pit",
+            "            where pit.name=si.species_name)",
+            "        )",
+            "WHERE si.species_name <> 'abolished'",
+            "AND si.taxnode_id is NULL",
+            ";",
+        ]
+    )
     return "\n".join(lines).rstrip() + "\n"
 
 
