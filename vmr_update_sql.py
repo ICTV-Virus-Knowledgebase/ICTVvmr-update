@@ -102,7 +102,7 @@ UPDATABLE_TO_SQL = {
 
 # Mapping used when creating INSERT statements for new records.
 INSERT_COLUMN_MAPPING: Sequence[Tuple[str, str]] = (
-    ("taxnode_id", "ICTV_ID"),
+    #    ("taxnode_id", "ICTV_ID"), # compute this from species_name, post-insert
     ("species_sort", "Species Sort"),
     ("isolate_sort", "Isolate Sort"),
     ("species_name", "Species"),
@@ -191,6 +191,7 @@ class InsertEntry:
 @dataclass
 class DeleteEntry:
     isolate_id: str
+    numeric_id: int
     target_value: str
     row_number: int
     details: List[Tuple[str, Optional[object]]]
@@ -1297,9 +1298,19 @@ def build_delete_entries(
             if column == "Species Sort":
                 continue
             details.append((column, row[column]))
+        numeric_id = extract_isolate_numeric(isolate_id)
+        if numeric_id is None:
+            errors.add(
+                workbook_name,
+                updated_sheet,
+                row_number,
+                f"Isolate ID '{isolate_id}' cannot be converted to numeric form.",
+            )
+            continue
         entries.append(
             DeleteEntry(
                 isolate_id=isolate_id,
+                numeric_id=numeric_id,
                 target_value=target_value,
                 row_number=row_number,
                 details=details,
@@ -1458,9 +1469,9 @@ def build_delete_sql_text(
             else:
                 comment_value = comment_value.replace("\n", " | ")
             lines.append(f"-- {column}: {comment_value}")
-        lines.append("DELETE FROM species_isolates")
+        lines.append("UPDATE species_isolates SET taxnode_id=NULL, species_name='abolished' ")
         lines.append(
-            f"WHERE isolate_id = {format_sql_value('isolate_id', entry.target_value)};"
+            f"WHERE isolate_id = {entry.numeric_id};"
         )
         lines.append("")
     return "\n".join(lines).rstrip() + "\n"
