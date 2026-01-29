@@ -575,7 +575,7 @@ def prepare_dataframe(workbook: Path, sheet_name: str) -> pd.DataFrame:
     df = df.copy()
     blank_mask = (
         df[BLANK_CHECK_COLUMNS]
-        .applymap(lambda value: normalize_string(value) is None)
+        .map(lambda value: normalize_string(value) is None)
         .all(axis=1)
     )
     if blank_mask.any():
