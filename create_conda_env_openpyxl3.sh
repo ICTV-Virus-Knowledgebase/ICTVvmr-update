@@ -17,4 +17,5 @@ conda create -v \
 	xlrd openpyxl=3 numpy \
 	biopython \
 	bioframe \
-	natsort
+	natsort \
+	pymysql
