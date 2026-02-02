@@ -19,7 +19,10 @@ import pandas as pd
 from openpyxl.styles import PatternFill
 from openpyxl.utils import get_column_letter
 
-DEFAULT_WORKBOOK = Path("./VMRs/VMR_MSL40.v1.20250307.editor_DBS_22 July.xlsx")
+DEFAULT_WORKBOOK = (
+    Path(__file__).resolve().parent
+    / "VMR_MSL40.v2.20251013.editor_dbs_20260202_v2.xlsx"
+)
 ERROR_FILENAME = "errors.xlsx"
 DELETES_FILENAME = "vmr_1_deletes.sql"
 UPDATES_FILENAME = "vmr_2_updates.sql"
@@ -162,6 +165,13 @@ COLUMN_VALUE_TARGETS = {
     ),
     "genome": ColumnValueTarget("taxonomy_molecule", ("abbrev", "name")),
 }
+
+
+@dataclass(frozen=True)
+class TaxonomyReferencePaths:
+    genome_coverage: Optional[Path]
+    molecule: Optional[Path]
+    host_source: Optional[Path]
 
 
 @dataclass
@@ -439,6 +449,34 @@ def parse_args() -> argparse.Namespace:
         default=ERROR_FILENAME,
         help="Filename for the error report workbook (default: %(default)s)",
     )
+    parser.add_argument(
+        "--vmr-export",
+        help=(
+            "Optional path to a vmr_export view export (CSV/XLSX) to validate "
+            "against the workbook 'Original' worksheet."
+        ),
+    )
+    parser.add_argument(
+        "--taxonomy-genome-coverage",
+        help=(
+            "Optional path to a taxonomy_genome_coverage table export (CSV/XLSX) "
+            "for validating 'Original Column Values'."
+        ),
+    )
+    parser.add_argument(
+        "--taxonomy-molecule",
+        help=(
+            "Optional path to a taxonomy_molecule table export (CSV/XLSX) "
+            "for validating 'Original Column Values'."
+        ),
+    )
+    parser.add_argument(
+        "--taxonomy-host-source",
+        help=(
+            "Optional path to a taxonomy_host_source table export (CSV/XLSX) "
+            "for validating 'Original Column Values'."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -465,6 +503,51 @@ def normalize_string(value: object) -> Optional[str]:
             return None
         return str(value)
     return str(value).strip() or None
+
+
+def normalize_column_key(value: object) -> Optional[str]:
+    text = normalize_string(value)
+    if text is None:
+        return None
+    return text.lower()
+
+
+def parse_hyperlink_label(value: object) -> Optional[str]:
+    text = normalize_string(value)
+    if text is None:
+        return None
+    match = re.fullmatch(r'=HYPERLINK\(".*?","(.*)"\)', text, flags=re.IGNORECASE)
+    if match:
+        return match.group(1)
+    return None
+
+
+def normalize_hyperlink_label(value: object) -> Optional[str]:
+    label = parse_hyperlink_label(value)
+    if label is not None:
+        return normalize_string(label)
+    return normalize_string(value)
+
+
+def read_tabular_file(path: Path, *, sheet_name: Optional[str] = None) -> pd.DataFrame:
+    suffix = path.suffix.lower()
+    if suffix in {".csv", ".txt"}:
+        sep = "\t" if suffix == ".txt" else ","
+        return pd.read_csv(path, sep=sep)
+    if suffix in {".xlsx", ".xlsm", ".xls"}:
+        return pd.read_excel(path, sheet_name=sheet_name, header=0, engine="openpyxl")
+    raise ValueError(f"Unsupported file format for {path}")
+
+
+def select_excel_sheet(path: Path, preferred: Sequence[str]) -> Optional[str]:
+    try:
+        with pd.ExcelFile(path) as xl:
+            for name in preferred:
+                if name in xl.sheet_names:
+                    return name
+            return xl.sheet_names[0] if xl.sheet_names else None
+    except Exception:
+        return None
 
 
 def canonicalize_column_value(value: str) -> str:
@@ -515,6 +598,235 @@ def normalize_isolate_type(value: object) -> Optional[str]:
     if text.startswith("ADD"):
         return "A"
     return None
+
+
+def build_column_lookup(df: pd.DataFrame) -> Dict[str, str]:
+    lookup: Dict[str, str] = {}
+    for name in df.columns:
+        key = normalize_column_key(name)
+        if key and key not in lookup:
+            lookup[key] = name
+    return lookup
+
+
+def load_reference_values(
+    path: Path,
+    *,
+    preferred_sheets: Sequence[str],
+    column_candidates: Sequence[str],
+    errors: ErrorCollector,
+) -> Optional[Set[str]]:
+    if not path.exists():
+        errors.add(path.name, "", None, f"Reference file not found: {path}")
+        return None
+    sheet = None
+    if path.suffix.lower() in {".xlsx", ".xlsm", ".xls"}:
+        sheet = select_excel_sheet(path, preferred_sheets)
+        if sheet is None:
+            errors.add(path.name, "", None, "Reference workbook does not contain any sheets.")
+            return None
+    try:
+        df = read_tabular_file(path, sheet_name=sheet)
+    except Exception as exc:
+        errors.add(path.name, "", None, f"Failed to read reference file: {exc!r}")
+        return None
+    lookup = build_column_lookup(df)
+    target_column = None
+    for candidate in column_candidates:
+        col = lookup.get(candidate.lower())
+        if col is not None:
+            target_column = col
+            break
+    if target_column is None:
+        errors.add(
+            path.name,
+            "",
+            None,
+            "Reference file is missing required column(s): " + ", ".join(column_candidates),
+        )
+        return None
+    values: Set[str] = set()
+    for cell in df[target_column]:
+        text = normalize_string(cell)
+        if text is not None:
+            values.add(text)
+    return values
+
+
+def load_taxonomy_reference_sets(
+    paths: TaxonomyReferencePaths,
+    errors: ErrorCollector,
+) -> Dict[str, Set[str]]:
+    reference_sets: Dict[str, Set[str]] = {}
+    if paths.genome_coverage:
+        values = load_reference_values(
+            paths.genome_coverage,
+            preferred_sheets=["taxonomy_genome_coverage", "genome_coverage"],
+            column_candidates=["name", "genome_coverage"],
+            errors=errors,
+        )
+        if values:
+            reference_sets["Genome coverage"] = values
+    if paths.molecule:
+        values = load_reference_values(
+            paths.molecule,
+            preferred_sheets=["taxonomy_molecule", "molecule"],
+            column_candidates=["abbrev", "name"],
+            errors=errors,
+        )
+        if values:
+            reference_sets["Genome"] = values
+    if paths.host_source:
+        values = load_reference_values(
+            paths.host_source,
+            preferred_sheets=["taxonomy_host_source", "host_source"],
+            column_candidates=["host_source"],
+            errors=errors,
+        )
+        if values:
+            reference_sets["Host source"] = values
+    return reference_sets
+
+
+def check_original_column_values_against_taxonomy(
+    original_values_df: pd.DataFrame,
+    workbook_name: str,
+    errors: ErrorCollector,
+    reference_sets: Dict[str, Set[str]],
+) -> None:
+    if not reference_sets:
+        return
+    for column, allowed_values in reference_sets.items():
+        if column not in original_values_df.columns:
+            errors.add(
+                workbook_name,
+                "Original Column Values",
+                None,
+                f"Column '{column}' missing from 'Original Column Values'.",
+            )
+            continue
+        for idx, cell in original_values_df[column].items():
+            text = normalize_string(cell)
+            if text is None:
+                continue
+            if text not in allowed_values:
+                errors.add(
+                    workbook_name,
+                    "Original Column Values",
+                    excel_row(idx),
+                    (
+                        f"Value '{text}' in column '{column}' is not present in the "
+                        "corresponding taxonomy reference table."
+                    ),
+                )
+
+
+def normalize_vmr_export_value(column: str, value: object) -> Optional[str]:
+    if column == "Virus isolate designation":
+        if isinstance(value, (pd.Timestamp, datetime)):
+            return value.strftime("%b-%y")
+    if column in {"Isolate ID", "ICTV_ID", "Accessions Link", "QC_taxon_proposal"}:
+        return normalize_hyperlink_label(value)
+    if column == "Exemplar or additional isolate":
+        normalized = normalize_isolate_type(value)
+        return normalized if normalized is not None else normalize_string(value)
+    if column in {"Isolate Sort", "Species Sort"}:
+        number = normalize_int_like(value)
+        return str(number) if number is not None else normalize_string(value)
+    return normalize_string(value)
+
+
+def compare_original_to_vmr_export(
+    original_df: pd.DataFrame,
+    workbook_name: str,
+    errors: ErrorCollector,
+    vmr_export_path: Path,
+) -> None:
+    if not vmr_export_path.exists():
+        errors.add(vmr_export_path.name, "", None, f"VMR export file not found: {vmr_export_path}")
+        return
+    sheet = None
+    if vmr_export_path.suffix.lower() in {".xlsx", ".xlsm", ".xls"}:
+        sheet = select_excel_sheet(
+            vmr_export_path, ["vmr_export", "vmr export", "VMR export"]
+        )
+    try:
+        export_df = read_tabular_file(vmr_export_path, sheet_name=sheet)
+    except Exception as exc:
+        errors.add(vmr_export_path.name, "", None, f"Failed to read VMR export: {exc!r}")
+        return
+
+    export_lookup = build_column_lookup(export_df)
+    missing_columns = [
+        name for name in REQUIRED_COLUMNS if name.lower() not in export_lookup
+    ]
+    if missing_columns:
+        errors.add(
+            vmr_export_path.name,
+            "",
+            None,
+            "VMR export is missing required columns: " + ", ".join(missing_columns),
+        )
+        return
+
+    export_rows: Dict[str, Tuple[int, pd.Series]] = {}
+    for idx, row in export_df.iterrows():
+        raw_isolate = row[export_lookup["isolate id"]]
+        isolate_label = normalize_hyperlink_label(raw_isolate)
+        isolate_id = normalize_isolate_id(isolate_label)
+        if isolate_id is None:
+            continue
+        if isolate_id in export_rows:
+            errors.add(
+                vmr_export_path.name,
+                "vmr_export",
+                excel_row(idx),
+                f"Isolate ID {isolate_id} appears multiple times in vmr_export.",
+            )
+            continue
+        export_rows[isolate_id] = (excel_row(idx), row)
+
+    original_map = original_df[original_df["__isolate_id"].notna()].set_index("__isolate_id")
+    original_ids = set(original_map.index)
+    export_ids = set(export_rows.keys())
+
+    for isolate_id in sorted(export_ids - original_ids):
+        export_row_num = export_rows[isolate_id][0]
+        errors.add(
+            vmr_export_path.name,
+            "vmr_export",
+            export_row_num,
+            f"Isolate ID {isolate_id} missing from Original worksheet.",
+        )
+
+    for isolate_id in sorted(original_ids - export_ids):
+        row_number = int(original_map.loc[isolate_id]["__row_number"])
+        errors.add(
+            workbook_name,
+            "Original",
+            row_number,
+            f"Isolate ID {isolate_id} missing from vmr_export.",
+        )
+
+    for isolate_id in sorted(original_ids & export_ids):
+        orig_row = original_map.loc[isolate_id]
+        if isinstance(orig_row, pd.DataFrame):
+            orig_row = orig_row.iloc[0]
+        export_row_num, export_row = export_rows[isolate_id]
+        for column in REQUIRED_COLUMNS:
+            export_value = export_row[export_lookup[column.lower()]]
+            orig_norm = normalize_vmr_export_value(column, orig_row[column])
+            export_norm = normalize_vmr_export_value(column, export_value)
+            if orig_norm != export_norm:
+                errors.add(
+                    workbook_name,
+                    "Original",
+                    int(orig_row["__row_number"]),
+                    (
+                        f"Column '{column}' for isolate {isolate_id} does not match "
+                        f"vmr_export (Original='{orig_norm or ''}', vmr_export='{export_norm or ''}')."
+                    ),
+                )
 
 
 def values_equal(original: object, updated: object, column: str) -> bool:
@@ -1507,6 +1819,8 @@ def process_workbook(
     errors: ErrorCollector,
     *,
     strict_accession: bool,
+    vmr_export_path: Optional[Path] = None,
+    taxonomy_paths: Optional[TaxonomyReferencePaths] = None,
 ) -> ProcessResult:
     with pd.ExcelFile(workbook_path) as xl:
         sheet_names = xl.sheet_names
@@ -1548,6 +1862,25 @@ def process_workbook(
     updated_df["__abolished"] = updated_df["Species Sort"].apply(is_abolish_value)
     original_df = prepare_dataframe(workbook_path, "Original")
 
+    taxonomy_reference_sets: Dict[str, Set[str]] = {}
+    if taxonomy_paths is not None:
+        taxonomy_reference_sets = load_taxonomy_reference_sets(taxonomy_paths, errors)
+        if taxonomy_reference_sets:
+            if "Original Column Values" in sheet_names:
+                original_column_values_df = pd.read_excel(
+                    workbook_path, sheet_name="Original Column Values", header=0
+                )
+                check_original_column_values_against_taxonomy(
+                    original_column_values_df, workbook_name, errors, taxonomy_reference_sets
+                )
+            else:
+                errors.add(
+                    workbook_name,
+                    "Original Column Values",
+                    None,
+                    "Workbook does not contain an 'Original Column Values' worksheet.",
+                )
+
     check_column_value_constraints(
         updated_df,
         workbook_name,
@@ -1557,6 +1890,8 @@ def process_workbook(
     )
     check_original_ids(original_df, workbook_name, errors)
     check_isolate_ids(updated_df, original_df, workbook_name, updated_sheet, errors)
+    if vmr_export_path is not None:
+        compare_original_to_vmr_export(original_df, workbook_name, errors, vmr_export_path)
     abolished_ids = {
         isolate_id
         for isolate_id in updated_df.loc[updated_df["__abolished"], "__isolate_id"].dropna()
@@ -1653,6 +1988,16 @@ def main() -> None:
         version=version,
         run_date=run_timestamp,
     )
+    vmr_export_path = Path(args.vmr_export).expanduser() if args.vmr_export else None
+    taxonomy_paths = TaxonomyReferencePaths(
+        genome_coverage=Path(args.taxonomy_genome_coverage).expanduser()
+        if args.taxonomy_genome_coverage
+        else None,
+        molecule=Path(args.taxonomy_molecule).expanduser() if args.taxonomy_molecule else None,
+        host_source=Path(args.taxonomy_host_source).expanduser()
+        if args.taxonomy_host_source
+        else None,
+    )
     result = ProcessResult(None, [], [], [], [])
 
     if not workbook_path.exists():
@@ -1669,6 +2014,8 @@ def main() -> None:
                 workbook_path.name,
                 errors,
                 strict_accession=args.strict_accession,
+                vmr_export_path=vmr_export_path,
+                taxonomy_paths=taxonomy_paths,
             )
         except ProcessingHalted:
             pass
