@@ -1,0 +1,3 @@
+[submodule "test_data/export/ICTVdatabase"]
+	path = test_data/export/ICTVdatabase
+	url = git@github.com:ICTV-Virus-Knowledgebase/ICTVdatabase.git
