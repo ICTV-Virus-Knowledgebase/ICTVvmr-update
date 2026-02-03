@@ -28,6 +28,8 @@ DELETES_FILENAME = "vmr_1_deletes.sql"
 UPDATES_FILENAME = "vmr_2_updates.sql"
 INSERTS_FILENAME = "vmr_3_inserts.sql"
 COLUMN_VALUE_INSERTS_FILENAME = "vmr_0_cv_inserts.sql"
+UPDATE_SORTS_FILENAME = "vmr_4_update_sorts.sql"
+QC_SPS_FILENAME = "vmr_5_exec_qc_sps.sql"
 VERSION_FILE = Path("version_git.txt")
 
 # Columns A:AG that must appear (in order) on the worksheets we process.
@@ -443,6 +445,16 @@ def parse_args() -> argparse.Namespace:
         "--column-values-sql",
         default=COLUMN_VALUE_INSERTS_FILENAME,
         help="Filename for column value INSERT statements (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--update-sorts-sql",
+        default=UPDATE_SORTS_FILENAME,
+        help="Filename for the update-sorts stored procedure call (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--qc-sps-sql",
+        default=QC_SPS_FILENAME,
+        help="Filename for the QC stored procedure call (default: %(default)s)",
     )
     parser.add_argument(
         "--errors-xlsx",
@@ -1646,6 +1658,17 @@ def generate_sql_header(
     return lines
 
 
+def build_procedure_sql_text(
+    workbook_path: Path,
+    version: str,
+    procedure_call: str,
+    warning: Optional[str] = None,
+) -> str:
+    lines = generate_sql_header(workbook_path, version, warning)
+    lines.append(procedure_call)
+    return "\n".join(lines).rstrip() + "\n"
+
+
 def format_sql_value(column: str, value: Optional[object]) -> str:
     if value is None:
         return "NULL"
@@ -1941,6 +1964,8 @@ def write_sql_outputs(
     updates_path = output_dir / args.updates_sql
     inserts_path = output_dir / args.inserts_sql
     column_values_path = output_dir / args.column_values_sql
+    update_sorts_path = output_dir / args.update_sorts_sql
+    qc_sps_path = output_dir / args.qc_sps_sql
     workbook_display = workbook_path.resolve()
 
     warning_text: Optional[str]
@@ -1961,10 +1986,18 @@ def write_sql_outputs(
     column_values_sql = build_column_value_insert_sql_text(
         result.column_value_inserts, workbook_display, version, warning_text
     )
+    update_sorts_sql = build_procedure_sql_text(
+        workbook_display, version, "CALL species_isolates_update_sorts();", warning_text
+    )
+    qc_sps_sql = build_procedure_sql_text(
+        workbook_display, version, "CALL QC_run_modules(:module_filter);", warning_text
+    )
     deletes_path.write_text(deletes_sql, encoding="utf-8")
     updates_path.write_text(updates_sql, encoding="utf-8")
     inserts_path.write_text(inserts_sql, encoding="utf-8")
     column_values_path.write_text(column_values_sql, encoding="utf-8")
+    update_sorts_path.write_text(update_sorts_sql, encoding="utf-8")
+    qc_sps_path.write_text(qc_sps_sql, encoding="utf-8")
 
 
 def main() -> None:
