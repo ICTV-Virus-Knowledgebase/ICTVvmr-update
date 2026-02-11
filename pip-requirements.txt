@@ -1,0 +1,11 @@
+#
+# Python packages to install with pip
+#
+pandas
+Pyarrow
+openpyxl>=3.0
+xlrd
+numpy
+biopython
+bioframe
+natsort

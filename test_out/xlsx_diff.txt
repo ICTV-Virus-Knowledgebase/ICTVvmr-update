@@ -1,7 +1,0 @@
-[33mWorksheets only in new workbook: Sheet2[0m
-
-[1mWorksheet: Sheet1[0m
-  Row 1: A: [31mfred[0m -> [32m<empty>[0m
-  Row 2: A: [31mjane[0m -> [32mjune[0m, C: [31m<empty>[0m -> [32mernie[0m
-  Row 3: A: [31m<empty>[0m -> [32mgeorge[0m
-

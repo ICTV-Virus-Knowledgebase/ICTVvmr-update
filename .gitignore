@@ -3,6 +3,8 @@ version_git.txt
 # editor files
 \#*
 *~
+~*
+.\#*
 # temp files
 nohup.out
 ##
