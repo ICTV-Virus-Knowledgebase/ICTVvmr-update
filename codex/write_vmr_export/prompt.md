@@ -1,4 +1,6 @@
-# Writing vmr_export.py
+# Prompt for Writing vmr_export.py 
+
+*(must be copy-pasted into codex web GUI)*
 
 You are going to write a python program to export data from several views/tables in a MariaDB (or, alternately pull the data from filesystem directory of (table|view).txt files that was generated from the database), and use it to populate a formatted template.xlsx file.
 

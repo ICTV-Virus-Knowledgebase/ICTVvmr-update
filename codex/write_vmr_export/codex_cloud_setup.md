@@ -4,18 +4,7 @@
 # In 'environment setup script', which is not a file, but a codex environment setting
 #----------------------------------------------------------------------
 
-# Create venv with latest pip
-python3 -m venv .venv
-. .venv/bin/activate
-pip install -U pip
-
-# load our needed python packages
-pip install -r requirements.txt
-
-# clone submodule repos
-git submodule sync --recursive
-git submodule update --init --recursive
-
+place the contents of [../codex_setup.sh](../codex_setup.sh)
 
 #----------------------------------------------------------------------
 # In [../../AGENTS.md](../../AGENTS.md) add
