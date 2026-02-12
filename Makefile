@@ -65,9 +65,7 @@ $(EXPORT_RESULTS_PUB): $(EXPORT_OUT_PUB)
 	./scripts/xlsx_diff --no-formatting $(EXPORT_OUT_PUB) $(EXPORT_EXPECTED_PUB) | tee $(EXPORT_RESULTS_PUB)
 
 $(EXPORT_RESULTS): $(EXPORT_RESULTS_EDITOR) $(EXPORT_RESULTS_PUB) 
-	@echo "## ANALYSIS: $(word 1,$^) ##"
 	@if [[ "$$(cat $(word 1,$^))" == "No differences found." ]]; then printf "EDITOR:SUCCESS" | tee "$@"; else printf "EDITOR:FAIL"|tee -a "$@"; fi
-	@echo "## ANALYSIS: $(word 2,$^) ##"
 	@if [[ "$$(cat $(word 2,$^))" == "No differences found." ]]; then echo  ";PUB:SUCCESS" | tee -a "$@"; else echo ";PUB:FAIL"|tee -a "$@"; fi
 
 export: $(EXPORT_OUT_EDITOR)
