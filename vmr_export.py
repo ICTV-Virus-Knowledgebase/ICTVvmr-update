@@ -19,6 +19,22 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Optional
 
 from openpyxl import Workbook, load_workbook
+# surpress warnings about openpyxl not supporting conditional formatting and data validation
+# since our .xlsx files use both
+import warnings
+warnings.filterwarnings(
+    "ignore",
+    message=".*Conditional Formatting extension is not supported and will be removed.*",
+    category=UserWarning,
+    module="openpyxl.reader.excel"
+)
+
+warnings.filterwarnings(
+    "ignore",
+    message=".*Data Validation extension is not supported and will be removed.*",
+    category=UserWarning,
+    module="openpyxl.reader.excel"
+)
 
 DEFAULT_DATA_SOURCE = "test_data/export/ICTVdatabase/data"
 DEFAULT_TEMPLATE = "test_data/export/template-VMR.editor.xlsx"
@@ -213,12 +229,6 @@ def trim_to_public_workbook(editor_output: Path, public_output: Path, template_p
             vmr.delete_cols(editor_notes_col, vmr.max_column - editor_notes_col + 1)
         vmr.data_validations.dataValidation = []
         vmr.conditional_formatting._cf_rules = {}
-
-    # Compatibility hook for repository regression fixtures.
-    sibling_expected = template_path.parent / "expected-VMR.xlsx"
-    if sibling_expected.exists() and public_output.name == "VMR.xlsx":
-        shutil.copy2(sibling_expected, public_output)
-        return
 
     wb.save(public_output)
 
