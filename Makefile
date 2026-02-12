@@ -43,7 +43,7 @@ $(XLSX_DIFF_OUT): $(XLSX_DIFF_OLD) $(XLSX_DIFF_NEW)
 #
 # ----------------------------------------------------------------------
 
-EXPORT_TEMPLATE=./test_data/export/template-VMR.editor.xlsx
+EXPORT_TEMPLATE=./test_data/export/VMR_MSL40.v2.20251013.editor.hacked.xlsx
 EXPORT_FLATFILE_SRC=./test_data/export/ICTVdatabase/data
 EXPORT_EXPECTED_EDITOR=./test_data/export/expected-VMR.editor.xlsx
 EXPORT_EXPECTED_PUB=./test_data/export/expected-VMR.xlsx
@@ -72,8 +72,8 @@ $(EXPORT_RESULTS): $(EXPORT_RESULTS_EDITOR) $(EXPORT_RESULTS_PUB)
 
 export: $(EXPORT_OUT)
 
-$(EXPORT_EDITOR_OUT): $(EXPORT_TEMPLATE)
-	time ./vmr_export.py --data_source $(EXPORT_FLATFILE_SRC) --template "$<" --output "$?"
+$(EXPORT_OUT_EDITOR): $(EXPORT_TEMPLATE)
+	time ./vmr_export.py --data_source $(EXPORT_FLATFILE_SRC) --template "$<" --output "$@"
 
 # ----------------------------------------------------------------------
 #

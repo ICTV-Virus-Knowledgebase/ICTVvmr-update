@@ -2,7 +2,6 @@
 """Command-line tool to diff two XLSX workbooks with colored output."""
 from __future__ import annotations
 
-import warnings
 import argparse
 import sys
 from collections import defaultdict
@@ -16,6 +15,7 @@ from openpyxl.utils import get_column_letter
 
 # surpress warnings about openpyxl not supporting conditional formatting and data validation
 # since our .xlsx files use both
+import warnings
 warnings.filterwarnings(
     "ignore",
     message=".*Conditional Formatting extension is not supported and will be removed.*",
