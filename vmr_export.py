@@ -108,8 +108,19 @@ class DataSourceReader:
             return []
         with path.open("r", encoding="utf-8", newline="") as handle:
             rows = [dict(row) for row in csv.DictReader(handle, delimiter="\t")]
+        if table_name == "vmr_export":
+            rows.sort(
+                key=lambda row: (
+                    self._as_int(row.get("Species Sort", "0")),
+                    self._as_int(row.get("Isolate Sort", "0")),
+                )
+            )
         self.logger.info(f"Read {len(rows)} rows from file {path}")
         return rows
+
+    @staticmethod
+    def _as_int(value: str) -> int:
+        return int(str(value or "0").strip())
 
     def _read_db(self, table_name: str) -> List[Dict[str, str]]:
         import pandas as pd  # type: ignore
@@ -245,10 +256,12 @@ def write_vmr_rows(ws, data_rows: List[Dict[str, str]], data_columns: List[str],
     clear_sheet_data(ws, start_row=2)
     for row_idx, row in enumerate(data_rows, start=2):
         for col_idx, col_name in enumerate(data_columns, start=1):
-            ws.cell(row=row_idx, column=col_idx).value = row.get(col_name, "")
             if col_name in {"Species Sort", "Isolate Sort"}:
+                value = int(str(row.get(col_name, "0") or "0").strip())
+                ws.cell(row=row_idx, column=col_idx).value = value
                 ws.cell(row=row_idx, column=col_idx).number_format = "0"
             else:
+                ws.cell(row=row_idx, column=col_idx).value = row.get(col_name, "")
                 ws.cell(row=row_idx, column=col_idx).number_format = "@"
     logger.info(f"Wrote {len(data_rows)} rows into worksheet '{ws.title}'")
     return len(data_rows)
