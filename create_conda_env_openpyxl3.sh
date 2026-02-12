@@ -10,7 +10,7 @@
 # conda config --add channels bioconda
 # conda config --set channel_priority strict
 
-conda create -v \
+conda create -v -y \
 	-p ./conda/vmr_openpyxl3 \
 	-c conda-forge -c bioconda \
 	pandas pyarrow \
