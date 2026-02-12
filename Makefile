@@ -34,7 +34,7 @@ $(XLSX_DIFF_OUT_DIFF): $(XLSX_DIFF_EXPECTED) $(XLSX_DIFF_OUT)
 $(XLSX_DIFF_OUT): $(XLSX_DIFF_OLD) $(XLSX_DIFF_NEW) 
 	@echo "## XLSX_DIFF XLSX FILES ##"
 	mkdir -p $$(dirname $@)
-	time ./scripts/xlsx_diff --no-formatting $(word 1,$^) $(word 2,$^) | tee $@
+	./scripts/xlsx_diff --no-formatting $(word 1,$^) $(word 2,$^) | tee $@
 
 
 # ----------------------------------------------------------------------
@@ -58,11 +58,11 @@ regression_export: $(EXPORT_RESULTS)
 
 $(EXPORT_RESULTS_EDITOR): $(EXPORT_OUT_EDITOR) 
 	@echo "## XLSX_DIFF: EDITOR  results ##"
-	time ./scripts/xlsx_diff --no-formatting $(EXPORT_OUT_EDITOR) $(EXPORT_EXPECTED_EDITOR) | tee $(EXPORT_RESULTS_EDITOR)
+	./scripts/xlsx_diff --no-formatting $(EXPORT_OUT_EDITOR) $(EXPORT_EXPECTED_EDITOR) | tee $(EXPORT_RESULTS_EDITOR)
 
 $(EXPORT_RESULTS_PUB): $(EXPORT_OUT_PUB) 
 	@echo "## XLSX_DIFF: PUB  results ##"
-	time ./scripts/xlsx_diff --no-formatting $(EXPORT_OUT_PUB) $(EXPORT_EXPECTED_PUB) | tee $(EXPORT_RESULTS_PUB)
+	./scripts/xlsx_diff --no-formatting $(EXPORT_OUT_PUB) $(EXPORT_EXPECTED_PUB) | tee $(EXPORT_RESULTS_PUB)
 
 $(EXPORT_RESULTS): $(EXPORT_RESULTS_EDITOR) $(EXPORT_RESULTS_PUB) 
 	@echo "## ANALYSIS: $(word 1,$^) ##"
@@ -73,7 +73,7 @@ $(EXPORT_RESULTS): $(EXPORT_RESULTS_EDITOR) $(EXPORT_RESULTS_PUB)
 export: $(EXPORT_OUT)
 
 $(EXPORT_OUT_EDITOR): $(EXPORT_TEMPLATE)
-	time ./vmr_export.py --data_source $(EXPORT_FLATFILE_SRC) --template "$<" --output "$@"
+	./vmr_export.py --data_source $(EXPORT_FLATFILE_SRC) --template "$<" --output "$@"
 
 # ----------------------------------------------------------------------
 #
