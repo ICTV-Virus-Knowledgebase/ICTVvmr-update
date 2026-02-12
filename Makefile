@@ -54,7 +54,7 @@ EXPORT_RESULTS_EDITOR=./test_out/export/results_editor.txt
 EXPORT_RESULTS_PUB=./test_out/export/results_pub.txt
 EXPORT_RESULTS=./test_out/export/results.txt
 
-regression_export: $(EXPORT_RESULTS)
+regression-export: $(EXPORT_RESULTS)
 
 $(EXPORT_RESULTS_EDITOR): $(EXPORT_OUT_EDITOR) 
 	@echo "## XLSX_DIFF: EDITOR  results ##"
@@ -81,7 +81,7 @@ $(EXPORT_OUT_EDITOR): $(EXPORT_TEMPLATE)
 #
 # ----------------------------------------------------------------------
 
-regression_update:
+regression-update:
 	@echo "ERROR: not yet implemented"
 
 update:
