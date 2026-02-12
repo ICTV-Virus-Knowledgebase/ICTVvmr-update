@@ -70,10 +70,10 @@ $(EXPORT_RESULTS): $(EXPORT_RESULTS_EDITOR) $(EXPORT_RESULTS_PUB)
 	@echo "## ANALYSIS: $(word 2,$^) ##"
 	@if [[ "$$(cat $(word 2,$^))" == "No differences found." ]]; then echo  ";PUB:SUCCESS" | tee -a "$@"; else echo ";PUB:FAIL"|tee -a "$@"; fi
 
-export: $(EXPORT_OUT)
+export: $(EXPORT_OUT_EDITOR)
 
 $(EXPORT_OUT_EDITOR): $(EXPORT_TEMPLATE)
-	./vmr_export.py --data_source $(EXPORT_FLATFILE_SRC) --template "$<" --output "$@"
+	./vmr_export.py --verbose --data_source $(EXPORT_FLATFILE_SRC) --template "$<" --output "$@"
 
 # ----------------------------------------------------------------------
 #
