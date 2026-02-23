@@ -21,7 +21,7 @@ from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 from openpyxl import Workbook, load_workbook
 from openpyxl.formatting.rule import FormulaRule
-from openpyxl.styles import PatternFill, Font
+from openpyxl.styles import PatternFill, Font, Alignment
 from openpyxl.worksheet.datavalidation import DataValidation
 from openpyxl.utils import get_column_letter
 
@@ -200,6 +200,7 @@ def clear_sheet_data(ws, start_row: int = 2, start_col: int = 1, end_col: Option
 def apply_column_values(ws, reader: DataSourceReader, logger: RunLogger) -> None:
     clear_sheet_data(ws, start_row=2)
     headers = [ws.cell(1, c).value for c in range(1, ws.max_column + 1)]
+    alpha_sort_columns = {"Genome coverage", "Genome", "Host source"}
     for col_idx, hdr in enumerate(headers, start=1):
         key = str(hdr).strip() if hdr else ""
         source = COLUMN_VALUE_SOURCES.get(key)
@@ -211,6 +212,8 @@ def apply_column_values(ws, reader: DataSourceReader, logger: RunLogger) -> None
             table_name, col_name = source
             values = [str(r.get(col_name, "")).strip() for r in reader.read_table(table_name)]
             values = [v for v in values if v]
+        if ws.title == "Column Values" and key in alpha_sort_columns:
+            values = sorted(values, key=str.lower)
         for row_idx, value in enumerate(values, start=2):
             ws.cell(row=row_idx, column=col_idx).value = value
         logger.info(f"Wrote {len(values)} values to sheet '{ws.title}' column '{key}'")
@@ -267,6 +270,27 @@ def write_vmr_rows(ws, data_rows: List[Dict[str, str]], data_columns: List[str],
     return len(data_rows)
 
 
+def apply_isolate_id_hyperlinks(ws, logger: RunLogger) -> None:
+    headers = header_map(ws)
+    isolate_col = headers.get("Isolate ID")
+    if not isolate_col:
+        return
+    updated = 0
+    for r in range(2, ws.max_row + 1):
+        cell = ws.cell(r, isolate_col)
+        value = str(cell.value or "").strip()
+        if not value:
+            continue
+        if value.startswith("=HYPERLINK("):
+            cell.style = "Hyperlink"
+            continue
+        cell.value = f'=HYPERLINK("https://ictv.global/id/{value}","{value}")'
+        cell.style = "Hyperlink"
+        updated += 1
+    if updated:
+        logger.info(f"Added {updated} isolate hyperlinks in worksheet '{ws.title}'")
+
+
 def fill_original_formulas(original_ws, vmr_sheet_name: str, row_count: int, data_columns: List[str], change_columns: List[str]) -> None:
     headers = header_map(original_ws)
     count_col = headers.get("#𝚫")
@@ -303,16 +327,28 @@ def fill_original_formulas(original_ws, vmr_sheet_name: str, row_count: int, dat
             original_ws.cell(r, target_col).value = formula
 
 
-def fill_vmr_delta_formulas(vmr_ws, row_count: int) -> None:
+def fill_vmr_delta_formulas(vmr_ws, row_count: int, logger: RunLogger) -> None:
     headers = header_map(vmr_ws)
-    count_col = headers.get("#𝚫")
     changes_col = headers.get("𝚫s")
-    if not count_col or not changes_col:
+    if not changes_col:
+        logger.error(f"Worksheet '{vmr_ws.title}' is missing column header '𝚫s' needed for delta formulas")
+        return
+    count_col = changes_col - 1
+    if count_col < 1:
+        logger.error(f"Worksheet '{vmr_ws.title}' does not have a column before '𝚫s' for '#𝚫' formulas")
+        return
+    count_header = vmr_ws.cell(1, count_col).value
+    if count_header is None or "#𝚫" not in str(count_header):
+        logger.error(f"Worksheet '{vmr_ws.title}' expected '#𝚫' header before '𝚫s', found '{count_header}'")
         return
     count_letter = get_column_letter(count_col)
     changes_letter = get_column_letter(changes_col)
+    count_alignment = Alignment(horizontal="right")
     for r in range(2, row_count + 2):
-        vmr_ws.cell(r, count_col).value = f'=IF(AND(LEN($A{r})=0,LEN($R{r})>0),"1",INDEX(Original!{count_letter}:{count_letter},MATCH($A{r},Original!$A:$A,0)))'
+        count_cell = vmr_ws.cell(r, count_col)
+        count_cell.value = f'=IF(AND(LEN($A{r})=0,LEN($R{r})>0),"1",INDEX(Original!{count_letter}:{count_letter},MATCH($A{r},Original!$A:$A,0)))'
+        count_cell.number_format = "0"
+        count_cell.alignment = count_alignment
         vmr_ws.cell(r, changes_col).value = f'=IF(AND(LEN($A{r})=0,LEN($R{r})>0),"new isolate",INDEX(Original!{changes_letter}:{changes_letter},MATCH($A{r},Original!$A:$A,0)))'
 
 
@@ -407,7 +443,8 @@ def run(argv: Optional[Iterable[str]] = None) -> int:
     if args.verbose:
         logger.info(f"Populating {vmr_sheet_name} worksheet")
     write_vmr_rows(vmr_ws, vmr_rows, data_columns, logger)
-    fill_vmr_delta_formulas(vmr_ws, row_count)
+    apply_isolate_id_hyperlinks(vmr_ws, logger)
+    fill_vmr_delta_formulas(vmr_ws, row_count, logger)
 
     # Step 4 (minimal): apply requested highlights to Column Values and VMR sheet.
     green_fill = PatternFill(fill_type="solid", fgColor="C6EFCE")
