@@ -70,7 +70,7 @@ $(EXPORT_RESULTS): $(EXPORT_RESULTS_EDITOR) $(EXPORT_RESULTS_PUB)
 
 export: $(EXPORT_OUT_EDITOR)
 
-$(EXPORT_OUT_EDITOR): $(EXPORT_TEMPLATE)
+$(EXPORT_OUT_EDITOR): $(EXPORT_TEMPLATE) ./vmr_export.py
 	./vmr_export.py --verbose --data_source $(EXPORT_FLATFILE_SRC) --template "$<" --output "$@"
 
 # ----------------------------------------------------------------------
@@ -84,5 +84,4 @@ regression-update:
 
 update:
 	@echo "ERROR: not yet implemented"
-
 
