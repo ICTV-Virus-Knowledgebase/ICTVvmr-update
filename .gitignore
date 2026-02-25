@@ -29,6 +29,8 @@ blast/
 # SLuRM files
 logs/
 log.*
+# VSCode
+.vscode
 # conda environments
 conda/
 # downloaded fasta
