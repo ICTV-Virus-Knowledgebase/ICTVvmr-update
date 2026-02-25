@@ -47,6 +47,12 @@ COLUMN_VALUE_SOURCES: Dict[str, Tuple[str, str] | List[str]] = {
     "Genome": ("taxonomy_molecule", "abbrev"),
     "Host source": ("taxonomy_host_source", "host_source"),
 }
+TABLE_SORT_KEYS: Dict[str, Tuple[str, bool]] = {
+    "taxonomy_genome_coverage": ("name", True),
+    "taxonomy_molecule": ("abbrev", True),
+    "taxonomy_host_source": ("host_source", True),
+}
+VMR_SORT_TABLES = {"vmr_export", "species_isolates"}
 
 
 @dataclass
@@ -108,13 +114,6 @@ class DataSourceReader:
             return []
         with path.open("r", encoding="utf-8", newline="") as handle:
             rows = [dict(row) for row in csv.DictReader(handle, delimiter="\t")]
-        if table_name == "vmr_export":
-            rows.sort(
-                key=lambda row: (
-                    self._as_int(row.get("Species Sort", "0")),
-                    self._as_int(row.get("Isolate Sort", "0")),
-                )
-            )
         self.logger.info(f"Read {len(rows)} rows from file {path}")
         return rows
 
@@ -135,10 +134,27 @@ class DataSourceReader:
 
     def read_table(self, table_name: str) -> List[Dict[str, str]]:
         if os.path.isdir(self.source):
-            return self._read_flatfile(table_name)
-        if self.is_db_url(self.source):
-            return self._read_db(table_name)
-        raise ValueError("Unsupported data source")
+            rows = self._read_flatfile(table_name)
+        elif self.is_db_url(self.source):
+            rows = self._read_db(table_name)
+        else:
+            raise ValueError("Unsupported data source")
+
+        sort_spec = TABLE_SORT_KEYS.get(table_name)
+        if sort_spec:
+            key_name, case_insensitive = sort_spec
+            if case_insensitive:
+                rows.sort(key=lambda row: str(row.get(key_name, "") or "").strip().lower())
+            else:
+                rows.sort(key=lambda row: str(row.get(key_name, "") or "").strip())
+        elif table_name in VMR_SORT_TABLES:
+            rows.sort(
+                key=lambda row: (
+                    self._as_int(row.get("Species Sort", "0")),
+                    self._as_int(row.get("Isolate Sort", "0")),
+                )
+            )
+        return rows
 
 
 def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
@@ -200,7 +216,6 @@ def clear_sheet_data(ws, start_row: int = 2, start_col: int = 1, end_col: Option
 def apply_column_values(ws, reader: DataSourceReader, logger: RunLogger) -> None:
     clear_sheet_data(ws, start_row=2)
     headers = [ws.cell(1, c).value for c in range(1, ws.max_column + 1)]
-    alpha_sort_columns = {"Genome coverage", "Genome", "Host source"}
     for col_idx, hdr in enumerate(headers, start=1):
         key = str(hdr).strip() if hdr else ""
         source = COLUMN_VALUE_SOURCES.get(key)
@@ -212,8 +227,6 @@ def apply_column_values(ws, reader: DataSourceReader, logger: RunLogger) -> None
             table_name, col_name = source
             values = [str(r.get(col_name, "")).strip() for r in reader.read_table(table_name)]
             values = [v for v in values if v]
-        if ws.title == "Column Values" and key in alpha_sort_columns:
-            values = sorted(values, key=str.lower)
         for row_idx, value in enumerate(values, start=2):
             ws.cell(row=row_idx, column=col_idx).value = value
         logger.info(f"Wrote {len(values)} values to sheet '{ws.title}' column '{key}'")
@@ -368,7 +381,20 @@ def update_changelog(wb, msl_release_num: str, version_tag: str, cli_args: Seque
     today = dt.date.today().isoformat()
     ws.cell(next_row, when_col).value = today
     ws.cell(next_row, who_col).value = f"vmr_export.py@{get_git_commit()}"
-    ws.cell(next_row, what_col).value = " ".join(cli_args) + f"\nMSL{msl_release_num} version {version_tag}"
+    repo_root = Path(__file__).resolve().parent
+    def _git_or_unknown(args: Sequence[str]) -> str:
+        try:
+            return subprocess.check_output(args, text=True, cwd=repo_root).strip()
+        except Exception:
+            return "unknown"
+    origin_url = _git_or_unknown(["git", "remote", "get-url", "origin"])
+    head_hash = _git_or_unknown(["git", "rev-parse", "HEAD"])
+    ws.cell(next_row, what_col).value = (
+        " ".join(cli_args)
+        + f"\nMSL{msl_release_num} version {version_tag}"
+        + f"\norigin: {origin_url}"
+        + f"\ncommit: {head_hash}"
+    )
 
 
 def trim_public_workbook(editor_path: Path, public_path: Path, logger: RunLogger) -> None:
@@ -414,17 +440,23 @@ def run(argv: Optional[Iterable[str]] = None) -> int:
     wb = load_workbook(args.template)
     logger.info(f"Read template workbook from {args.template}")
 
+    # Main sheet is named "VMR MSL##" 
+    # where ## is the latest msl_release_num from the taxonomy_toc table, 
+    # so go find that sheet and report on it's actual name.
     vmr_sheet_name = validate_template(wb, logger)
     if vmr_sheet_name is None:
         logger.write_errors_xlsx(output_editor)
         return 1
 
+    # get main taxonony data worksheets
     vmr_ws = wb[vmr_sheet_name]
     original_ws = wb["Original"]
 
+    # fill in controlled vocabulary workseets
     apply_column_values(wb["Original Column Values"], reader, logger)
     apply_column_values(wb["Column Values"], reader, logger)
 
+    # pull latest taxonomy/isolate data from files/db
     vmr_rows = reader.read_table("vmr_export")
     if not vmr_rows:
         return fail("No rows found in vmr_export source")
@@ -435,6 +467,7 @@ def run(argv: Optional[Iterable[str]] = None) -> int:
         logger.write_errors_xlsx(output_editor)
         return 1
 
+    # put new taxonomy/isoaltes into workbook
     if args.verbose:
         logger.info("Populating Original worksheet")
     row_count = write_vmr_rows(original_ws, vmr_rows, data_columns, logger)
@@ -447,28 +480,87 @@ def run(argv: Optional[Iterable[str]] = None) -> int:
     fill_vmr_delta_formulas(vmr_ws, row_count, logger)
 
     # Step 4 (minimal): apply requested highlights to Column Values and VMR sheet.
-    green_fill = PatternFill(fill_type="solid", fgColor="C6EFCE")
-    green_font = Font(color="006100")
-    yellow_fill = PatternFill(fill_type="solid", fgColor="FFEB9C")
-    yellow_font = Font(color="9C6500")
+    #
+    # set up visuals (OpenPyXL doesn't support the "Green Fill with Dark Green Text", etc, presets)
+    green_fill = PatternFill(fill_type="solid", fgColor="FFC6EFCE", bgColor="FFC6EFCE")
+    green_font = Font(color="FF006100")
+    red_fill = PatternFill(fill_type="solid", fgColor="FFFFC7CE", bgColor="FFFFC7CE")
+    red_font = Font(color="FF9C0006")
+    yellow_fill = PatternFill(fill_type="solid", fgColor="FFFFEB9C", bgColor="FFFFEB9C")
+    yellow_font = Font(color="FF9C6500")
 
-    col_values = wb["Column Values"]
-    col_values.conditional_formatting._cf_rules = {}
-    col_values.conditional_formatting.add(
-        f"A2:{get_column_letter(col_values.max_column)}1048576",
-        FormulaRule(formula=["=AND(NOT(ISBLANK(A1)), ISNA(MATCH(A1, 'Original Column Values'!A:A, 0)))"], fill=green_fill, font=green_font),
+    # 
+    # highlight changes in WS "Column Values" relative to "Original Column Values" sheet
+    #
+    col_values_ws = wb["Column Values"]
+    # remove all previous conditional formatting
+    col_values_ws.conditional_formatting._cf_rules = {}
+    col_values_ws.conditional_formatting.add(
+        f"A1:{get_column_letter(col_values_ws.max_column)}1048576",
+        FormulaRule(formula=["=AND(NOT(ISBLANK(A1)), ISNA(MATCH(A1, 'Original Column Values'!A:A, 0)))"], fill=red_fill, font=red_font),
     )
 
+    # 
+    # highlight changes in WS "VMR MSL##" main worksheet relative to "Original" sheet, and count/describe changes in "#𝚫"/"𝚫s" columns
+    #
+    # remove all previous conditional formatting
+    vmr_ws.conditional_formatting._cf_rules = {}
+    # find all the columns we need by header name 
     vmr_headers = header_map(vmr_ws)
-    count_col = vmr_headers.get("#𝚫")
+    # find count_col, the header that contains the substring "#𝚫" for the count of changes
+    count_col = None
+    for header, col in vmr_headers.items():
+        if "#𝚫" in header:
+            count_col = col
+            break
     changes_col = vmr_headers.get("𝚫s")
-    if count_col and changes_col:
-        cl = get_column_letter(count_col)
-        dl = get_column_letter(changes_col)
-        vmr_ws.conditional_formatting.add(f"{cl}2:{cl}1048576", FormulaRule(formula=[f"={cl}2>0"], fill=yellow_fill, font=yellow_font))
-        vmr_ws.conditional_formatting.add(f"{dl}2:{dl}1048576", FormulaRule(formula=[f"=LEN({dl}2)>0"], fill=yellow_fill, font=yellow_font))
+    isolate_col = vmr_headers.get("Isolate ID")
+    species_col = vmr_headers.get("Species")
+    if not all([count_col, changes_col, isolate_col, species_col]):
+        missing = []
+        if not count_col:
+            missing.append("#𝚫")
+        if not changes_col:
+            missing.append("𝚫s")
+        if not isolate_col:
+            missing.append("Isolate ID")
+        if not species_col:
+            missing.append("Species")
+        logger.error(
+            f"Worksheet '{vmr_ws.title}' missing required column(s): {', '.join(missing)}"
+        )
+        logger.write_errors_xlsx(output_editor)
+        return 1
+ 
+    # add yellow highlights to deltas columns when there are changes in the row
+    count_col_letter = get_column_letter(count_col)
+    changes_col_letter = get_column_letter(changes_col)
+    vmr_ws.conditional_formatting.add(f"{count_col_letter}1:{count_col_letter}1048576", FormulaRule(formula=[f"={count_col_letter}1>0"], fill=yellow_fill, font=yellow_font))
+    vmr_ws.conditional_formatting.add(f"{changes_col_letter}1:{changes_col_letter}1048576", FormulaRule(formula=[f"=LEN({changes_col_letter}1)>0"], fill=yellow_fill, font=yellow_font))
 
+    # add green highlights for new isolates (insert new row) in the VMR sheet 
+    # (where "Isolate ID" is empty and "Species" is not)
+    editor_notes_col= vmr_headers.get("Editor Notes")
+    
+    isolate_col_letter = get_column_letter(isolate_col)
+    species_col_letter = get_column_letter(species_col)
+    vmr_ws.conditional_formatting.add(
+        f"A1:AC1048576",
+        FormulaRule(formula=[f"=AND(LEN(${isolate_col_letter}1)=0, LEN(${species_col_letter}1)>0)"], fill=green_fill, font=green_font),
+    )
+        
+    # add green highlighting for individual cell changes in the VMR sheet 
+    # (where the cell value is not blank and does not match the Original sheet value for that Isolate ID)
+    editor_notes_col_letter = get_column_letter(editor_notes_col)
+    vmr_ws.conditional_formatting.add(
+        f"A1:{editor_notes_col_letter}1048576",
+        FormulaRule(formula=[f"=NOT(EXACT(A1,INDEX(Original!A:A,MATCH($A1,Original!$A:$A,0))))"], fill=green_fill, font=green_font),
+    )
+    
+    # Freeze scroling for Row 1 and Columns A-C in the VMR sheet.
     vmr_ws.freeze_panes = "D2"
+    
+    # add data-validation dropdowns to certain columns in the VMR sheet, sourcing from the "Column Values" sheet
     for col_letter, list_col in [("T", "A"), ("Y", "B"), ("Z", "C"), ("AA", "D")]:
         dv = DataValidation(type="list", formula1=f"='Column Values'!${list_col}:${list_col}")
         vmr_ws.add_data_validation(dv)
@@ -484,12 +576,15 @@ def run(argv: Optional[Iterable[str]] = None) -> int:
         if msl_release and not vmr_sheet_name.endswith(msl_release):
             return fail(f"Template VMR sheet '{vmr_sheet_name}' does not match latest msl_release_num '{msl_release}'")
 
+    # add this release info to the change-log sheet, along with the count_col_letterI args used to generate it (for traceability)
     update_changelog(wb, msl_release, version_tag, [sys.argv[0], *sys.argv[1:]])
 
+    # save full (editor) version 
     output_editor.parent.mkdir(parents=True, exist_ok=True)
     wb.save(output_editor)
     logger.info(f"Wrote workbook with {len(wb.sheetnames)} worksheet(s) to {output_editor}")
 
+    # trim out non-public sheets and columns, and save public version
     trim_public_workbook(output_editor, output_public, logger)
     logger.write_errors_xlsx(output_editor)
     return 0
