@@ -390,8 +390,8 @@ def update_changelog(wb, msl_release_num: str, version_tag: str, cli_args: Seque
     origin_url = _git_or_unknown(["git", "remote", "get-url", "origin"])
     head_hash = _git_or_unknown(["git", "rev-parse", "HEAD"])
     ws.cell(next_row, what_col).value = (
-        " ".join(cli_args)
-        + f"\nMSL{msl_release_num} version {version_tag}"
+        f"Command: {' '.join(cli_args)}"
+        + f"\nmsl_release: MSL{msl_release_num} version {version_tag}"
         + f"\norigin: {origin_url}"
         + f"\ncommit: {head_hash}"
     )

@@ -61,15 +61,15 @@ regression-export: $(EXPORT_RESULTS)
 
 $(EXPORT_RESULTS_EDITOR): $(EXPORT_OUT_EDITOR) $(EXPORT_EXPECTED_EDITOR)
 	@echo "## XLSX_DIFF: EDITOR  results ##"
-	./scripts/xlsx_diff --no-formatting $(EXPORT_OUT_EDITOR) $(EXPORT_EXPECTED_EDITOR) | tee $(EXPORT_RESULTS_EDITOR)
+	./scripts/xlsx_diff --no-formatting  --ignore "CHANGELOG.editor:commit:" $(EXPORT_OUT_EDITOR) $(EXPORT_EXPECTED_EDITOR) | tee $(EXPORT_RESULTS_EDITOR)
 
 $(EXPORT_RESULTS_PUB): $(EXPORT_OUT_PUB) $(EXPORT_EXPECTED_PUB)
 	@echo "## XLSX_DIFF: PUB  results ##"
-	./scripts/xlsx_diff --no-formatting $(EXPORT_OUT_PUB) $(EXPORT_EXPECTED_PUB) | tee $(EXPORT_RESULTS_PUB)
+	./scripts/xlsx_diff --no-formatting --ignore "CHANGELOG.editor:commit:" $(EXPORT_OUT_PUB) $(EXPORT_EXPECTED_PUB) | tee $(EXPORT_RESULTS_PUB)
 
 $(EXPORT_RESULTS_ERRORS): $(EXPORT_OUT_ERRORS) $(EXPORT_EXPECTED_ERRORS)
 	@echo "## XLSX_DIFF: ERRORS  results ##"
-	./scripts/xlsx_diff --no-formatting $(EXPORT_OUT_ERRORS) $(EXPORT_EXPECTED_ERRORS) | tee $(EXPORT_RESULTS_ERRORS)
+	./scripts/xlsx_diff --no-formatting  --ignore "CHANGELOG.editor:commit:" $(EXPORT_OUT_ERRORS) $(EXPORT_EXPECTED_ERRORS) | tee $(EXPORT_RESULTS_ERRORS)
 
 $(EXPORT_RESULTS): $(EXPORT_RESULTS_EDITOR) $(EXPORT_RESULTS_PUB) $(EXPORT_RESULTS_ERRORS)
 	@if [[ "$$(cat $(word 1,$^))" == "No differences found." ]]; then printf "EDITOR:SUCCESS" | tee "$@"; else printf "EDITOR:FAIL"|tee -a "$@"; fi
