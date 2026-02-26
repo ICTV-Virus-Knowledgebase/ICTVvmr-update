@@ -47,26 +47,34 @@ EXPORT_TEMPLATE=./test_data/export/VMR_MSL40.v2.20251013.editor.hacked.xlsx
 EXPORT_FLATFILE_SRC=./test_data/export/ICTVdatabase/data
 EXPORT_EXPECTED_EDITOR=./test_data/export/expected-VMR.editor.xlsx
 EXPORT_EXPECTED_PUB=./test_data/export/expected-VMR.xlsx
+EXPORT_EXPECTED_ERRORS=./test_data/export/expected-errors.xlsx
 
 EXPORT_OUT_EDITOR=./test_out/export/VMR.editor.xlsx
 EXPORT_OUT_PUB=./test_out/export/VMR.xlsx
+EXPORT_OUT_ERRORS=./test_out/export/errors.xlsx
 EXPORT_RESULTS_EDITOR=./test_out/export/results_editor.txt
 EXPORT_RESULTS_PUB=./test_out/export/results_pub.txt
+EXPORT_RESULTS_ERRORS=./test_out/export/results_errors.txt
 EXPORT_RESULTS=./test_out/export/results.txt
 
 regression-export: $(EXPORT_RESULTS)
 
-$(EXPORT_RESULTS_EDITOR): $(EXPORT_OUT_EDITOR) 
+$(EXPORT_RESULTS_EDITOR): $(EXPORT_OUT_EDITOR) $(EXPORT_EXPECTED_EDITOR)
 	@echo "## XLSX_DIFF: EDITOR  results ##"
 	./scripts/xlsx_diff --no-formatting $(EXPORT_OUT_EDITOR) $(EXPORT_EXPECTED_EDITOR) | tee $(EXPORT_RESULTS_EDITOR)
 
-$(EXPORT_RESULTS_PUB): $(EXPORT_OUT_PUB) 
+$(EXPORT_RESULTS_PUB): $(EXPORT_OUT_PUB) $(EXPORT_EXPECTED_PUB)
 	@echo "## XLSX_DIFF: PUB  results ##"
 	./scripts/xlsx_diff --no-formatting $(EXPORT_OUT_PUB) $(EXPORT_EXPECTED_PUB) | tee $(EXPORT_RESULTS_PUB)
 
-$(EXPORT_RESULTS): $(EXPORT_RESULTS_EDITOR) $(EXPORT_RESULTS_PUB) 
+$(EXPORT_RESULTS_ERRORS): $(EXPORT_OUT_ERRORS) $(EXPORT_EXPECTED_ERRORS)
+	@echo "## XLSX_DIFF: ERRORS  results ##"
+	./scripts/xlsx_diff --no-formatting $(EXPORT_OUT_ERRORS) $(EXPORT_EXPECTED_ERRORS) | tee $(EXPORT_RESULTS_ERRORS)
+
+$(EXPORT_RESULTS): $(EXPORT_RESULTS_EDITOR) $(EXPORT_RESULTS_PUB) $(EXPORT_RESULTS_ERRORS)
 	@if [[ "$$(cat $(word 1,$^))" == "No differences found." ]]; then printf "EDITOR:SUCCESS" | tee "$@"; else printf "EDITOR:FAIL"|tee -a "$@"; fi
-	@if [[ "$$(cat $(word 2,$^))" == "No differences found." ]]; then echo  ";PUB:SUCCESS" | tee -a "$@"; else echo ";PUB:FAIL"|tee -a "$@"; fi
+	@if [[ "$$(cat $(word 2,$^))" == "No differences found." ]]; then printf ";PUB:SUCCESS" | tee -a "$@"; else printf ";PUB:FAIL"|tee -a "$@"; fi
+	@if [[ "$$(cat $(word 3,$^))" == "No differences found." ]]; then echo  ";ERRORS:SUCCESS" | tee -a "$@"; else echo ";ERRORS:FAIL"|tee -a "$@"; fi
 
 export: $(EXPORT_OUT_EDITOR)
 
@@ -84,4 +92,3 @@ regression-update:
 
 update:
 	@echo "ERROR: not yet implemented"
-
