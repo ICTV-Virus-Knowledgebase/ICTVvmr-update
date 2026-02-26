@@ -218,27 +218,22 @@ def parse_ignore_specs(items: Sequence[str]) -> List[Tuple[re.Pattern, re.Patter
     return parsed
 
 
-def build_ignored_rows(old_ws, new_ws, patterns: Sequence[Tuple[re.Pattern, re.Pattern]]) -> set[int]:
+def build_ignored_rows(new_ws, patterns: Sequence[Tuple[re.Pattern, re.Pattern]]) -> set[int]:
     if not patterns:
         return set()
-    max_row = max(old_ws.max_row or 0, new_ws.max_row or 0)
-    max_col = max(old_ws.max_column or 0, new_ws.max_column or 0)
+    max_row = new_ws.max_row or 0
+    max_col = new_ws.max_column or 0
     if max_row == 0 or max_col == 0:
         return set()
 
     ignored: set[int] = set()
     for r in range(1, max_row + 1):
         for c in range(1, max_col + 1):
-            old_cell = old_ws.cell(r, c)
             new_cell = new_ws.cell(r, c)
-            old_text = display_value(old_cell) if old_cell.value is not None else None
             new_text = display_value(new_cell) if new_cell.value is not None else None
-            if old_text is None and new_text is None:
+            if new_text is None:
                 continue
             for _sheet_re, value_re in patterns:
-                if old_text is not None and value_re.search(str(old_text)):
-                    ignored.add(r)
-                    break
                 if new_text is not None and value_re.search(str(new_text)):
                     ignored.add(r)
                     break
@@ -368,7 +363,7 @@ def main(argv: Sequence[str]) -> int:
         sheet_ignores = [
             spec for spec in ignore_specs if spec[0].search(sheet_name)
         ]
-        ignored_rows = build_ignored_rows(old_ws, new_ws, sheet_ignores)
+        ignored_rows = build_ignored_rows(new_ws, sheet_ignores)
         value_diffs, format_diffs = diff_cells(
             old_ws, new_ws, include_formatting=not args.no_formatting
         )
