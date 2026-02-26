@@ -7,6 +7,7 @@ import sys
 from collections import defaultdict
 from dataclasses import dataclass
 from itertools import zip_longest
+import re
 from typing import Dict, List, Optional, Sequence, Tuple
 
 from openpyxl import load_workbook
@@ -76,6 +77,13 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
         "--by-cell",
         action="store_true",
         help="Display each changed cell on its own line",
+    )
+    parser.add_argument(
+        "--ignore",
+        action="append",
+        default=[],
+        metavar="WORKSHEET_REGEX:VALUE_REGEX",
+        help="Suppress diffs for rows where any cell matches VALUE_REGEX within worksheets matching WORKSHEET_REGEX. Can be repeated.",
     )
     return parser.parse_args(argv)
 
@@ -198,6 +206,47 @@ def diff_cells(
     return value_diffs, format_diffs
 
 
+def parse_ignore_specs(items: Sequence[str]) -> List[Tuple[re.Pattern, re.Pattern]]:
+    parsed: List[Tuple[re.Pattern, re.Pattern]] = []
+    for item in items:
+        if ":" not in item:
+            raise ValueError(f"Invalid --ignore value '{item}' (expected WORKSHEET_REGEX:VALUE_REGEX)")
+        sheet_expr, value_expr = item.split(":", 1)
+        if not sheet_expr or not value_expr:
+            raise ValueError(f"Invalid --ignore value '{item}' (expected WORKSHEET_REGEX:VALUE_REGEX)")
+        parsed.append((re.compile(sheet_expr), re.compile(value_expr)))
+    return parsed
+
+
+def build_ignored_rows(old_ws, new_ws, patterns: Sequence[Tuple[re.Pattern, re.Pattern]]) -> set[int]:
+    if not patterns:
+        return set()
+    max_row = max(old_ws.max_row or 0, new_ws.max_row or 0)
+    max_col = max(old_ws.max_column or 0, new_ws.max_column or 0)
+    if max_row == 0 or max_col == 0:
+        return set()
+
+    ignored: set[int] = set()
+    for r in range(1, max_row + 1):
+        for c in range(1, max_col + 1):
+            old_cell = old_ws.cell(r, c)
+            new_cell = new_ws.cell(r, c)
+            old_text = display_value(old_cell) if old_cell.value is not None else None
+            new_text = display_value(new_cell) if new_cell.value is not None else None
+            if old_text is None and new_text is None:
+                continue
+            for _sheet_re, value_re in patterns:
+                if old_text is not None and value_re.search(str(old_text)):
+                    ignored.add(r)
+                    break
+                if new_text is not None and value_re.search(str(new_text)):
+                    ignored.add(r)
+                    break
+            if r in ignored:
+                break
+    return ignored
+
+
 def describe_conditional_formatting(ws) -> Dict[str, List[str]]:
     cf_map: Dict[str, List[str]] = {}
     for cf_range in ws.conditional_formatting:
@@ -298,6 +347,11 @@ def report_missing_or_new_sheets(
 
 def main(argv: Sequence[str]) -> int:
     args = parse_args(argv)
+    try:
+        ignore_specs = parse_ignore_specs(args.ignore)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
     old_wb = load_workbook_safe(args.old)
     new_wb = load_workbook_safe(args.new)
 
@@ -311,9 +365,16 @@ def main(argv: Sequence[str]) -> int:
     for sheet_name in common_sheets:
         old_ws = old_wb[sheet_name]
         new_ws = new_wb[sheet_name]
+        sheet_ignores = [
+            spec for spec in ignore_specs if spec[0].search(sheet_name)
+        ]
+        ignored_rows = build_ignored_rows(old_ws, new_ws, sheet_ignores)
         value_diffs, format_diffs = diff_cells(
             old_ws, new_ws, include_formatting=not args.no_formatting
         )
+        if ignored_rows:
+            value_diffs = [diff for diff in value_diffs if diff.row not in ignored_rows]
+            format_diffs = [diff for diff in format_diffs if diff.row not in ignored_rows]
         cond_diffs: List[ConditionalFormatDiff] = []
         if not args.no_formatting:
             cond_diffs = diff_conditional_formatting(old_ws, new_ws)

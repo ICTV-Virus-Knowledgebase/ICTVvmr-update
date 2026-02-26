@@ -34,7 +34,7 @@ $(XLSX_DIFF_OUT_DIFF): $(XLSX_DIFF_EXPECTED) $(XLSX_DIFF_OUT)
 $(XLSX_DIFF_OUT): $(XLSX_DIFF_OLD) $(XLSX_DIFF_NEW) 
 	@echo "## XLSX_DIFF XLSX FILES ##"
 	mkdir -p $$(dirname $@)
-	./scripts/xlsx_diff --no-formatting $(word 1,$^) $(word 2,$^) | tee $@
+	./scripts/xlsx_diff --no-formatting --ignore "Sheet1:ignore this line" $(word 1,$^) $(word 2,$^) | tee $@
 
 
 # ----------------------------------------------------------------------

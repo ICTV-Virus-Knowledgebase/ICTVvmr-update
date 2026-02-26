@@ -4,4 +4,5 @@
   Row 1: A: [31mfred[0m -> [32m<empty>[0m
   Row 2: A: [31mjane[0m -> [32mjune[0m, C: [31m<empty>[0m -> [32mernie[0m
   Row 3: A: [31m<empty>[0m -> [32mgeorge[0m
+  Row 5: B: [31m<empty>[0m -> [32mreal difference[0m
 
