@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import argparse
+import difflib
 import sys
 from collections import defaultdict
 from dataclasses import dataclass
 from itertools import zip_longest
 import re
+import unicodedata
 from typing import Dict, List, Optional, Sequence, Tuple
 
 from openpyxl import load_workbook
@@ -37,6 +39,18 @@ GREEN = "\033[32m"
 YELLOW = "\033[33m"
 BOLD = "\033[1m"
 RESET = "\033[0m"
+
+# Additional Unicode whitespace/space-like code points commonly seen in Excel/Office text.
+SPACE_LIKE_CHARS = {
+    "\u00A0",  # NO-BREAK SPACE
+    "\u2007",  # FIGURE SPACE
+    "\u202F",  # NARROW NO-BREAK SPACE
+    "\u200B",  # ZERO WIDTH SPACE
+    "\u200C",  # ZERO WIDTH NON-JOINER
+    "\u200D",  # ZERO WIDTH JOINER
+    "\u2060",  # WORD JOINER
+    "\uFEFF",  # ZERO WIDTH NO-BREAK SPACE/BOM
+}
 
 
 @dataclass(frozen=True)
@@ -89,6 +103,18 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
         "--counts",
         action="store_true",
         help="Show only the count of rows with differences per worksheet",
+    )
+    parser.add_argument(
+        "-w",
+        "--white-space",
+        action="store_true",
+        help="Suppress value differences that are whitespace-only",
+    )
+    parser.add_argument(
+        "-s",
+        "--show-white-space",
+        action="store_true",
+        help="For whitespace-only value differences, show differing whitespace ranges in [] and color only the brackets",
     )
     parser.add_argument(
         "--ignore",
@@ -150,6 +176,7 @@ def diff_cells(
     new_ws,
     *,
     include_formatting: bool = True,
+    ignore_whitespace_only: bool = False,
 ) -> Tuple[List[CellDiff], List[CellFormatDiff]]:
     old_max_row = old_ws.max_row or 0
     new_max_row = new_ws.max_row or 0
@@ -201,6 +228,8 @@ def diff_cells(
                 old_display = display_value(old_cell) if old_cell is not None else None
                 new_display = display_value(new_cell) if new_cell is not None else None
                 if old_display != new_display:
+                    if ignore_whitespace_only and is_whitespace_only_change(old_display, new_display):
+                        continue
                     value_diffs.append(
                         CellDiff(
                             row=row_index,
@@ -300,8 +329,103 @@ def format_cell_coordinate(row: int, column: int) -> str:
     return f"{get_column_letter(column)}{row}"
 
 
+def is_space_like(ch: str) -> bool:
+    if ch.isspace() or ch in SPACE_LIKE_CHARS:
+        return True
+    return unicodedata.category(ch) == "Zs"
+
+
+def is_whitespace_only_change(old_value: Optional[str], new_value: Optional[str]) -> bool:
+    old_text = "" if old_value is None else old_value
+    new_text = "" if new_value is None else new_value
+    if old_text == new_text:
+        return False
+    old_compact = "".join(ch for ch in old_text if not is_space_like(ch))
+    new_compact = "".join(ch for ch in new_text if not is_space_like(ch))
+    return old_compact == new_compact
+
+
+def _render_char(ch: str) -> str:
+    if ch == " ":
+        return "<sp>"
+    if ch == "\t":
+        return "<tab>"
+    if ch == "\n":
+        return "<nl>"
+    if ch == "\r":
+        return "<cr>"
+    if ch == "\u00A0":
+        return "<nbsp>"
+    if ch == "\u2007":
+        return "<figsp>"
+    if ch == "\u202F":
+        return "<nnbsp>"
+    if ch == "\u200B":
+        return "<zwsp>"
+    if ch == "\u200C":
+        return "<zwnj>"
+    if ch == "\u200D":
+        return "<zwj>"
+    if ch == "\u2060":
+        return "<wj>"
+    if ch == "\uFEFF":
+        return "<zwnbsp>"
+    return ch
+
+
+def _mark_whitespace_changes(source: str, target: str, *, on_source: bool) -> List[bool]:
+    marks = [False] * len(source)
+    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(a=source, b=target).get_opcodes():
+        if on_source and tag in {"replace", "delete"}:
+            for idx in range(i1, i2):
+                marks[idx] = True
+        if (not on_source) and tag in {"replace", "insert"}:
+            for idx in range(j1, j2):
+                marks[idx] = True
+    return marks
+
+
+def _render_with_marked_whitespace(text: str, marks: List[bool], bracket_color: str) -> str:
+    parts: List[str] = []
+    i = 0
+    while i < len(text):
+        if marks[i] and is_space_like(text[i]):
+            j = i
+            while j < len(text) and marks[j] and is_space_like(text[j]):
+                j += 1
+            token = "".join(_render_char(ch) for ch in text[i:j])
+            parts.append(f"{bracket_color}[{token}]{RESET}")
+            i = j
+            continue
+        parts.append(_render_char(text[i]))
+        i += 1
+    return "".join(parts)
+
+
+def render_value_change(
+    old_value: Optional[str], new_value: Optional[str], *, show_whitespace: bool
+) -> Tuple[str, str]:
+    if show_whitespace and is_whitespace_only_change(old_value, new_value):
+        old_text = "" if old_value is None else old_value
+        new_text = "" if new_value is None else new_value
+        old_marks = _mark_whitespace_changes(old_text, new_text, on_source=True)
+        new_marks = _mark_whitespace_changes(new_text, old_text, on_source=True)
+        return (
+            _render_with_marked_whitespace(old_text, old_marks, RED),
+            _render_with_marked_whitespace(new_text, new_marks, GREEN),
+        )
+    old_rendered = old_value if old_value is not None else "<empty>"
+    new_rendered = new_value if new_value is not None else "<empty>"
+    return (f"{RED}{old_rendered}{RESET}", f"{GREEN}{new_rendered}{RESET}")
+
+
 def print_value_diffs(
-    sheet_name: str, diffs: List[CellDiff], *, by_cell: bool, counts_only: bool
+    sheet_name: str,
+    diffs: List[CellDiff],
+    *,
+    by_cell: bool,
+    counts_only: bool,
+    show_whitespace: bool,
 ) -> None:
     if not diffs:
         return
@@ -315,8 +439,9 @@ def print_value_diffs(
     if by_cell:
         for diff in diffs:
             coord = format_cell_coordinate(diff.row, diff.column)
-            old = f"{RED}{diff.old_value}{RESET}" if diff.old_value is not None else f"{RED}<empty>{RESET}"
-            new = f"{GREEN}{diff.new_value}{RESET}" if diff.new_value is not None else f"{GREEN}<empty>{RESET}"
+            old, new = render_value_change(
+                diff.old_value, diff.new_value, show_whitespace=show_whitespace
+            )
             print(f"  {coord}: {old} -> {new}")
     else:
         rows: Dict[int, List[CellDiff]] = defaultdict(list)
@@ -326,11 +451,8 @@ def print_value_diffs(
             entries = []
             for diff in sorted(rows[row_index], key=lambda d: d.column):
                 coord = get_column_letter(diff.column)
-                old = (
-                    f"{RED}{diff.old_value}{RESET}" if diff.old_value is not None else f"{RED}<empty>{RESET}"
-                )
-                new = (
-                    f"{GREEN}{diff.new_value}{RESET}" if diff.new_value is not None else f"{GREEN}<empty>{RESET}"
+                old, new = render_value_change(
+                    diff.old_value, diff.new_value, show_whitespace=show_whitespace
                 )
                 entries.append(f"{coord}: {old} -> {new}")
             print(f"  Row {row_index}: " + ", ".join(entries))
@@ -430,7 +552,10 @@ def main(argv: Sequence[str]) -> int:
         ]
         ignored_rows = build_ignored_rows(new_ws, sheet_ignores)
         value_diffs, format_diffs = diff_cells(
-            old_ws, new_ws, include_formatting=not args.no_formatting
+            old_ws,
+            new_ws,
+            include_formatting=not args.no_formatting,
+            ignore_whitespace_only=args.white_space,
         )
         if ignored_rows:
             value_diffs = [diff for diff in value_diffs if diff.row not in ignored_rows]
@@ -446,6 +571,7 @@ def main(argv: Sequence[str]) -> int:
                 value_diffs,
                 by_cell=args.by_cell,
                 counts_only=args.counts,
+                show_whitespace=args.show_white_space,
             )
         if not args.no_formatting and (format_diffs or cond_diffs):
             any_diffs = True
