@@ -79,6 +79,18 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
         help="Display each changed cell on its own line",
     )
     parser.add_argument(
+        "--sheet",
+        action="append",
+        default=[],
+        metavar="OLD_SHEET[:NEW_SHEET]",
+        help="Restrict comparison to specific sheet(s). Can be repeated. Optionally map old to new sheet name.",
+    )
+    parser.add_argument(
+        "--counts",
+        action="store_true",
+        help="Show only the count of rows with differences per worksheet",
+    )
+    parser.add_argument(
         "--ignore",
         action="append",
         default=[],
@@ -218,6 +230,21 @@ def parse_ignore_specs(items: Sequence[str]) -> List[Tuple[re.Pattern, re.Patter
     return parsed
 
 
+def parse_sheet_specs(items: Sequence[str]) -> List[Tuple[str, str]]:
+    pairs: List[Tuple[str, str]] = []
+    for item in items:
+        if not item:
+            raise ValueError("Invalid --sheet value (empty)")
+        if ":" in item:
+            old_name, new_name = item.split(":", 1)
+            if not old_name or not new_name:
+                raise ValueError(f"Invalid --sheet value '{item}' (expected OLD_SHEET[:NEW_SHEET])")
+            pairs.append((old_name, new_name))
+        else:
+            pairs.append((item, item))
+    return pairs
+
+
 def build_ignored_rows(new_ws, patterns: Sequence[Tuple[re.Pattern, re.Pattern]]) -> set[int]:
     if not patterns:
         return set()
@@ -273,8 +300,16 @@ def format_cell_coordinate(row: int, column: int) -> str:
     return f"{get_column_letter(column)}{row}"
 
 
-def print_value_diffs(sheet_name: str, diffs: List[CellDiff], *, by_cell: bool) -> None:
+def print_value_diffs(
+    sheet_name: str, diffs: List[CellDiff], *, by_cell: bool, counts_only: bool
+) -> None:
     if not diffs:
+        return
+    if counts_only:
+        rows_with_diff = len({diff.row for diff in diffs})
+        print(f"{BOLD}Worksheet: {sheet_name}{RESET}")
+        print(f"  Rows with differences: {rows_with_diff}")
+        print()
         return
     print(f"{BOLD}Worksheet: {sheet_name}{RESET}")
     if by_cell:
@@ -302,8 +337,14 @@ def print_value_diffs(sheet_name: str, diffs: List[CellDiff], *, by_cell: bool) 
     print()
 
 
-def print_format_diffs(sheet_name: str, diffs: List[CellFormatDiff]) -> None:
+def print_format_diffs(sheet_name: str, diffs: List[CellFormatDiff], *, counts_only: bool) -> None:
     if not diffs:
+        return
+    if counts_only:
+        rows_with_diff = len({diff.row for diff in diffs})
+        print(f"{BOLD}Formatting differences for worksheet: {sheet_name}{RESET}")
+        print(f"  Rows with differences: {rows_with_diff}")
+        print()
         return
     print(f"{BOLD}Formatting differences for worksheet: {sheet_name}{RESET}")
     for diff in diffs:
@@ -314,8 +355,15 @@ def print_format_diffs(sheet_name: str, diffs: List[CellFormatDiff]) -> None:
     print()
 
 
-def print_conditional_diffs(sheet_name: str, diffs: List[ConditionalFormatDiff]) -> None:
+def print_conditional_diffs(
+    sheet_name: str, diffs: List[ConditionalFormatDiff], *, counts_only: bool
+) -> None:
     if not diffs:
+        return
+    if counts_only:
+        print(f"{BOLD}Conditional formatting differences for worksheet: {sheet_name}{RESET}")
+        print(f"  Differences: {len(diffs)}")
+        print()
         return
     print(f"{BOLD}Conditional formatting differences for worksheet: {sheet_name}{RESET}")
     for diff in diffs:
@@ -328,22 +376,30 @@ def print_conditional_diffs(sheet_name: str, diffs: List[ConditionalFormatDiff])
 
 
 def report_missing_or_new_sheets(
-    old_only: Sequence[str], new_only: Sequence[str]
+    old_only: Sequence[str], new_only: Sequence[str], *, counts_only: bool
 ) -> bool:
-    if old_only:
-        print(f"{YELLOW}Worksheets only in old workbook: {', '.join(old_only)}{RESET}")
-    if new_only:
-        print(f"{YELLOW}Worksheets only in new workbook: {', '.join(new_only)}{RESET}")
-    if old_only or new_only:
+    if not old_only and not new_only:
+        return False
+    if counts_only:
+        for name in old_only:
+            print(f"{BOLD}Worksheet missing in new workbook: {name}{RESET}")
+        for name in new_only:
+            print(f"{BOLD}Worksheet missing in old workbook: {name}{RESET}")
         print()
-        return True
-    return False
+    else:
+        if old_only:
+            print(f"{YELLOW}Worksheets only in old workbook: {', '.join(old_only)}{RESET}")
+        if new_only:
+            print(f"{YELLOW}Worksheets only in new workbook: {', '.join(new_only)}{RESET}")
+        print()
+    return True
 
 
 def main(argv: Sequence[str]) -> int:
     args = parse_args(argv)
     try:
         ignore_specs = parse_ignore_specs(args.ignore)
+        sheet_specs = parse_sheet_specs(args.sheet)
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return 2
@@ -352,16 +408,25 @@ def main(argv: Sequence[str]) -> int:
 
     old_sheets = set(old_wb.sheetnames)
     new_sheets = set(new_wb.sheetnames)
+    if sheet_specs:
+        old_sheets = {old for old, _ in sheet_specs}
+        new_sheets = {new for _, new in sheet_specs}
     any_diffs = report_missing_or_new_sheets(
-        sorted(old_sheets - new_sheets), sorted(new_sheets - old_sheets)
+        sorted(old_sheets - new_sheets),
+        sorted(new_sheets - old_sheets),
+        counts_only=args.counts,
     )
-
-    common_sheets = sorted(old_sheets & new_sheets)
-    for sheet_name in common_sheets:
-        old_ws = old_wb[sheet_name]
-        new_ws = new_wb[sheet_name]
+    if sheet_specs:
+        common_sheets = sheet_specs
+    else:
+        common_sheets = [(name, name) for name in sorted(old_sheets & new_sheets)]
+    for old_name, new_name in common_sheets:
+        if old_name not in old_wb.sheetnames or new_name not in new_wb.sheetnames:
+            continue
+        old_ws = old_wb[old_name]
+        new_ws = new_wb[new_name]
         sheet_ignores = [
-            spec for spec in ignore_specs if spec[0].search(sheet_name)
+            spec for spec in ignore_specs if spec[0].search(old_name)
         ]
         ignored_rows = build_ignored_rows(new_ws, sheet_ignores)
         value_diffs, format_diffs = diff_cells(
@@ -375,11 +440,18 @@ def main(argv: Sequence[str]) -> int:
             cond_diffs = diff_conditional_formatting(old_ws, new_ws)
         if value_diffs:
             any_diffs = True
-            print_value_diffs(sheet_name, value_diffs, by_cell=args.by_cell)
+            sheet_label = old_name if old_name == new_name else f"{old_name} -> {new_name}"
+            print_value_diffs(
+                sheet_label,
+                value_diffs,
+                by_cell=args.by_cell,
+                counts_only=args.counts,
+            )
         if not args.no_formatting and (format_diffs or cond_diffs):
             any_diffs = True
-            print_format_diffs(sheet_name, format_diffs)
-            print_conditional_diffs(sheet_name, cond_diffs)
+            sheet_label = old_name if old_name == new_name else f"{old_name} -> {new_name}"
+            print_format_diffs(sheet_label, format_diffs, counts_only=args.counts)
+            print_conditional_diffs(sheet_label, cond_diffs, counts_only=args.counts)
     if not any_diffs:
         print("No differences found.")
     return 0
