@@ -97,12 +97,59 @@ class RunLogger:
         wb.save(path)
 
 
+@dataclass(frozen=True)
+class MaskRule:
+    table_name: str
+    column: str
+    value: str
+
+
+def sql_like_to_regex(pattern: str) -> re.Pattern[str]:
+    parts: List[str] = ["^"]
+    for ch in pattern:
+        if ch == "%":
+            parts.append(".*")
+        elif ch == "_":
+            parts.append(".")
+        else:
+            parts.append(re.escape(ch))
+    parts.append("$")
+    return re.compile("".join(parts))
+
+
+def load_mask_rules(mask_path: Optional[str], logger: RunLogger) -> List[MaskRule]:
+    if not mask_path:
+        return []
+    path = Path(mask_path)
+    if not path.exists():
+        logger.warning(f"Mask file not found, no masking applied: {path}")
+        return []
+    rules: List[MaskRule] = []
+    with path.open("r", encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle, delimiter="\t")
+        expected = ["table_name", "column", "value"]
+        if reader.fieldnames != expected:
+            raise ValueError(
+                f"Mask file must have header columns: {', '.join(expected)}"
+            )
+        for i, row in enumerate(reader, start=2):
+            table_name = str(row.get("table_name", "")).strip()
+            column = str(row.get("column", "")).strip()
+            value = str(row.get("value", "")).strip()
+            if not table_name or not column or not value:
+                raise ValueError(f"Mask file row {i} must provide table_name, column, and value")
+            rules.append(MaskRule(table_name=table_name, column=column, value=value))
+    logger.info(f"Loaded {len(rules)} mask rule(s) from {path}")
+    return rules
+
+
 class DataSourceReader:
     """Reusable source reader for flatfiles or MariaDB connection URLs."""
 
-    def __init__(self, source: str, logger: RunLogger):
+    def __init__(self, source: str, logger: RunLogger, mask_rules: Optional[List[MaskRule]] = None):
         self.source = source
         self.logger = logger
+        self.mask_rules = mask_rules or []
 
     @staticmethod
     def is_db_url(value: str) -> bool:
@@ -115,6 +162,7 @@ class DataSourceReader:
             return []
         with path.open("r", encoding="utf-8", newline="") as handle:
             rows = [dict(row) for row in csv.DictReader(handle, delimiter="\t")]
+        rows = self._apply_flatfile_masks(table_name, rows)
         self.logger.info(f"Read {len(rows)} rows from file {path}")
         return rows
 
@@ -124,14 +172,55 @@ class DataSourceReader:
 
     def _read_db(self, table_name: str) -> List[Dict[str, str]]:
         import pandas as pd  # type: ignore
-        from sqlalchemy import create_engine  # type: ignore
+        from sqlalchemy import create_engine, text  # type: ignore
 
         engine = create_engine(self.source)
+        rules = [rule for rule in self.mask_rules if rule.table_name == table_name]
+        query = f"SELECT * FROM `{self._safe_identifier(table_name)}`"
+        params: Dict[str, str] = {}
+        if rules:
+            clauses: List[str] = []
+            for idx, rule in enumerate(rules):
+                col = self._safe_identifier(rule.column)
+                key = f"mask_{idx}"
+                clauses.append(f"`{col}` LIKE :{key}")
+                params[key] = rule.value
+            query += " WHERE NOT (" + " OR ".join(clauses) + ")"
         with engine.begin() as conn:
-            frame = pd.read_sql(f"SELECT * FROM {table_name}", conn)
+            frame = pd.read_sql(text(query), conn, params=params)
         rows = frame.fillna("").astype(str).to_dict("records")
+        if rules:
+            self.logger.info(f"Applied {len(rules)} DB mask rule(s) to table/view {table_name}")
         self.logger.info(f"Read {len(rows)} rows from DB table/view {table_name}")
         return rows
+
+    @staticmethod
+    def _safe_identifier(value: str) -> str:
+        text = str(value).strip()
+        if not re.fullmatch(r"[A-Za-z0-9_]+", text):
+            raise ValueError(f"Unsafe SQL identifier in mask/table name: {value!r}")
+        return text
+
+    def _apply_flatfile_masks(self, table_name: str, rows: List[Dict[str, str]]) -> List[Dict[str, str]]:
+        rules = [rule for rule in self.mask_rules if rule.table_name == table_name]
+        if not rules:
+            return rows
+        compiled = [
+            (rule.column, sql_like_to_regex(rule.value))
+            for rule in rules
+        ]
+        filtered: List[Dict[str, str]] = []
+        for row in rows:
+            masked = False
+            for column, pattern in compiled:
+                value = str(row.get(column, "") or "")
+                if pattern.match(value):
+                    masked = True
+                    break
+            if not masked:
+                filtered.append(row)
+        self.logger.info(f"Applied {len(rules)} flatfile mask rule(s) to table '{table_name}'")
+        return filtered
 
     def read_table(self, table_name: str) -> List[Dict[str, str]]:
         if os.path.isdir(self.source):
@@ -171,6 +260,11 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
     parser.add_argument(
         "-o", "--output", default=DEFAULT_OUTPUT,
         help="Must end with .editor.xlsx; writes FILEPATH.editor.xlsx and FILEPATH.xlsx",
+    )
+    parser.add_argument(
+        "--mask",
+        default="db_mask.tsv",
+        help="TSV with columns table_name, column, value (SQL LIKE pattern) for source masking.",
     )
     parser.add_argument("-v", "--verbose", action="store_true", help="Verbose mode prints INFO/SUCCESS logs.")
     parser.add_argument(
@@ -650,7 +744,8 @@ def run(argv: Optional[Iterable[str]] = None) -> int:
     if not Path(args.template).exists():
         return fail(f"Template file not found: {args.template}")
 
-    reader = DataSourceReader(args.data_source, logger)
+    mask_rules = load_mask_rules(args.mask, logger)
+    reader = DataSourceReader(args.data_source, logger, mask_rules=mask_rules)
     wb = load_workbook(args.template)
     logger.info(f"Read template workbook from {args.template}")
 

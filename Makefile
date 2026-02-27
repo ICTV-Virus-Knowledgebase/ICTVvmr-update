@@ -45,6 +45,7 @@ $(XLSX_DIFF_OUT): $(XLSX_DIFF_OLD) $(XLSX_DIFF_NEW)
 
 EXPORT_TEMPLATE=./test_data/export/VMR_MSL40.v2.20251013.editor.hacked.xlsx
 EXPORT_FLATFILE_SRC=./test_data/export/ICTVdatabase/data
+EXPORT_DB_MASK=./test_data/export/db_mask.tsv
 EXPORT_EXPECTED_EDITOR=./test_data/export/expected-VMR.editor.xlsx
 EXPORT_EXPECTED_PUB=./test_data/export/expected-VMR.xlsx
 EXPORT_EXPECTED_ERRORS=./test_data/export/expected-errors.xlsx
@@ -61,15 +62,15 @@ regression-export: $(EXPORT_RESULTS)
 
 $(EXPORT_RESULTS_EDITOR): $(EXPORT_OUT_EDITOR) $(EXPORT_EXPECTED_EDITOR)
 	@echo "## XLSX_DIFF: EDITOR  results ##"
-	./scripts/xlsx_diff --no-formatting  --ignore "CHANGELOG.editor:commit:" $(EXPORT_OUT_EDITOR) $(EXPORT_EXPECTED_EDITOR) | tee $(EXPORT_RESULTS_EDITOR)
+	./scripts/xlsx_diff --no-formatting  --ignore "CHANGELOG.editor:commit:" $(EXPORT_EXPECTED_EDITOR) $(EXPORT_OUT_EDITOR) | tee $(EXPORT_RESULTS_EDITOR)
 
 $(EXPORT_RESULTS_PUB): $(EXPORT_OUT_PUB) $(EXPORT_EXPECTED_PUB)
 	@echo "## XLSX_DIFF: PUB  results ##"
-	./scripts/xlsx_diff --no-formatting --ignore "CHANGELOG.editor:commit:" $(EXPORT_OUT_PUB) $(EXPORT_EXPECTED_PUB) | tee $(EXPORT_RESULTS_PUB)
+	./scripts/xlsx_diff --no-formatting --ignore "CHANGELOG.editor:commit:"  $(EXPORT_EXPECTED_PUB) $(EXPORT_OUT_PUB) | tee $(EXPORT_RESULTS_PUB)
 
 $(EXPORT_RESULTS_ERRORS): $(EXPORT_OUT_ERRORS) $(EXPORT_EXPECTED_ERRORS)
 	@echo "## XLSX_DIFF: ERRORS  results ##"
-	./scripts/xlsx_diff --no-formatting  --ignore "CHANGELOG.editor:commit:" $(EXPORT_OUT_ERRORS) $(EXPORT_EXPECTED_ERRORS) | tee $(EXPORT_RESULTS_ERRORS)
+	./scripts/xlsx_diff --no-formatting  --ignore "CHANGELOG.editor:commit:" $(EXPORT_EXPECTED_ERRORS) $(EXPORT_OUT_ERRORS) | tee $(EXPORT_RESULTS_ERRORS)
 
 $(EXPORT_RESULTS): $(EXPORT_RESULTS_EDITOR) $(EXPORT_RESULTS_PUB) $(EXPORT_RESULTS_ERRORS)
 	@if [[ "$$(cat $(word 1,$^))" == "No differences found." ]]; then printf "EDITOR:SUCCESS" | tee "$@"; else printf "EDITOR:FAIL"|tee -a "$@"; fi
@@ -78,8 +79,8 @@ $(EXPORT_RESULTS): $(EXPORT_RESULTS_EDITOR) $(EXPORT_RESULTS_PUB) $(EXPORT_RESUL
 
 export: $(EXPORT_OUT_EDITOR)
 
-$(EXPORT_OUT_EDITOR): $(EXPORT_TEMPLATE) ./vmr_export.py
-	./vmr_export.py --keep-going --verbose --data_source $(EXPORT_FLATFILE_SRC) --template "$<" --output "$@"
+$(EXPORT_OUT_EDITOR): $(EXPORT_TEMPLATE) ./vmr_export.py $(EXPORT_DB_MASK)
+	./vmr_export.py --keep-going --verbose --data_source $(EXPORT_FLATFILE_SRC) --mask $(EXPORT_DB_MASK) --template "$<" --output "$@"
 
 # ----------------------------------------------------------------------
 #
