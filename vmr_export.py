@@ -15,6 +15,7 @@ import os
 import re
 import subprocess
 import sys
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
@@ -238,6 +239,21 @@ def apply_column_values(ws, reader: DataSourceReader, logger: RunLogger) -> None
         logger.info(f"Wrote {len(values)} values to sheet '{ws.title}' column '{key}'")
 
 
+def autofit_sheet_columns(ws, max_width: int = 80) -> None:
+    for col_idx in range(1, ws.max_column + 1):
+        max_len = 0
+        for row_idx in range(1, ws.max_row + 1):
+            value = ws.cell(row=row_idx, column=col_idx).value
+            if value is None:
+                continue
+            text = str(value)
+            cell_len = max((len(line) for line in text.splitlines()), default=0)
+            if cell_len > max_len:
+                max_len = cell_len
+        width = min(max_width, max(8, max_len + 2))
+        ws.column_dimensions[get_column_letter(col_idx)].width = width
+
+
 def _parse_heading_tokens(heading: str) -> List[str]:
     return [part.strip() for part in heading.split(",") if part and part.strip()]
 
@@ -251,15 +267,33 @@ def _extract_definition_bullets(text: str) -> List[str]:
     return bullets
 
 
-def validate_column_definitions(vmr_ws, defs_ws, column_values_ws) -> List[str]:
+def _normalize_match_text(value: str) -> str:
+    normalized = unicodedata.normalize("NFKC", value)
+    out: List[str] = []
+    for ch in normalized:
+        cat = unicodedata.category(ch)
+        if ch.isspace() or cat.startswith("Z") or cat.startswith("P"):
+            continue
+        out.append(ch.lower())
+    return "".join(out)
+
+
+def _choose_match(source: str, candidates: List[str]) -> Tuple[str, bool]:
+    if source in candidates:
+        return source, True
+    return candidates[0], False
+
+
+def validate_column_definitions(vmr_ws, defs_ws, column_values_ws) -> Tuple[List[str], List[str]]:
     issues: List[str] = []
+    mappings: List[str] = []
     vmr_headers = header_map(vmr_ws)
     editor_notes_col = vmr_headers.get("Editor Notes")
     if not editor_notes_col:
         issues.append(
             f"Worksheet '{vmr_ws.title}' is missing 'Editor Notes' header needed for definitions validation"
         )
-        return issues
+        return issues, mappings
 
     defs_headers = header_map(defs_ws)
     defs_col_col = defs_headers.get("Column")
@@ -276,10 +310,12 @@ def validate_column_definitions(vmr_ws, defs_ws, column_values_ws) -> List[str]:
         issues.append(
             f"Worksheet '{defs_ws.title}' missing required column(s) for validation: {', '.join(missing)}"
         )
-        return issues
+        return issues, mappings
 
-    heading_to_defs: Dict[str, List[str]] = {}
-    range_dr_tokens: List[str] = []
+    heading_raw_by_norm: Dict[str, List[str]] = {}
+    heading_defs_by_norm: Dict[str, List[str]] = {}
+    range_dr_raw_tokens: List[str] = []
+    range_dr_by_norm: Dict[str, List[str]] = {}
     found_dr_row = False
     for r in range(2, defs_ws.max_row + 1):
         column_text = str(defs_ws.cell(r, defs_col_col).value or "").strip()
@@ -289,12 +325,26 @@ def validate_column_definitions(vmr_ws, defs_ws, column_values_ws) -> List[str]:
             continue
         tokens = _parse_heading_tokens(heading_text)
         for token in tokens:
-            heading_to_defs.setdefault(token, [])
+            norm_token = _normalize_match_text(token)
+            if not norm_token:
+                continue
+            heading_raw_by_norm.setdefault(norm_token, [])
+            if token not in heading_raw_by_norm[norm_token]:
+                heading_raw_by_norm[norm_token].append(token)
+            heading_defs_by_norm.setdefault(norm_token, [])
             if definition_text:
-                heading_to_defs[token].append(definition_text)
+                heading_defs_by_norm[norm_token].append(definition_text)
         if re.fullmatch(r"D\s*-\s*R", column_text):
             found_dr_row = True
-            range_dr_tokens = tokens
+            range_dr_raw_tokens = tokens
+            range_dr_by_norm = {}
+            for token in tokens:
+                norm_token = _normalize_match_text(token)
+                if not norm_token:
+                    continue
+                range_dr_by_norm.setdefault(norm_token, [])
+                if token not in range_dr_by_norm[norm_token]:
+                    range_dr_by_norm[norm_token].append(token)
 
     # All VMR columns before "Editor Notes" must be documented in Column definitions.
     vmr_required_headers: List[str] = []
@@ -304,10 +354,16 @@ def validate_column_definitions(vmr_ws, defs_ws, column_values_ws) -> List[str]:
         if header:
             vmr_required_headers.append(header)
     for header in vmr_required_headers:
-        if header not in heading_to_defs:
+        norm_header = _normalize_match_text(header)
+        candidates = heading_raw_by_norm.get(norm_header, [])
+        if not candidates:
             issues.append(
                 f"Worksheet '{defs_ws.title}' is missing documentation for VMR header '{header}' from worksheet '{vmr_ws.title}'"
             )
+            continue
+        matched, exact = _choose_match(header, candidates)
+        note = "" if exact else " (normalized match; text differs)"
+        mappings.append(f"Header map: VMR '{header}' -> Defs '{matched}'{note}")
 
     # "Realm" through "Species" are documented via a single D-R row with CSV headings.
     vmr_dr_headers: List[str] = []
@@ -320,10 +376,16 @@ def validate_column_definitions(vmr_ws, defs_ws, column_values_ws) -> List[str]:
         issues.append(f"Worksheet '{defs_ws.title}' is missing the grouped 'D - R' row for Realm..Species headings")
     else:
         for header in vmr_dr_headers:
-            if header not in range_dr_tokens:
+            norm_header = _normalize_match_text(header)
+            candidates = range_dr_by_norm.get(norm_header, [])
+            if not candidates:
                 issues.append(
                     f"Worksheet '{defs_ws.title}' D - R heading list is missing '{header}' from worksheet '{vmr_ws.title}'"
                 )
+                continue
+            matched, exact = _choose_match(header, candidates)
+            note = "" if exact else " (normalized match; text differs)"
+            mappings.append(f"D-R map: VMR '{header}' -> Defs '{matched}'{note}")
 
     # Validate that each controlled value in Column Values appears in the matching Definition bullets.
     col_values_headers = header_map(column_values_ws)
@@ -337,7 +399,8 @@ def validate_column_definitions(vmr_ws, defs_ws, column_values_ws) -> List[str]:
             value = str(column_values_ws.cell(r, cv_col).value or "").strip()
             if value:
                 values.append(value)
-        defs_texts = heading_to_defs.get(header, [])
+        norm_header = _normalize_match_text(header)
+        defs_texts = heading_defs_by_norm.get(norm_header, [])
         if not defs_texts:
             issues.append(
                 f"Worksheet '{defs_ws.title}' has no Definition text for controlled-value header '{header}'"
@@ -345,17 +408,39 @@ def validate_column_definitions(vmr_ws, defs_ws, column_values_ws) -> List[str]:
             continue
         defs_combined = "\n".join(defs_texts)
         bullets = _extract_definition_bullets(defs_combined)
-        bullet_set = set(bullets)
+        bullets_by_norm: Dict[str, List[str]] = {}
+        for bullet in bullets:
+            norm_bullet = _normalize_match_text(bullet)
+            if not norm_bullet:
+                continue
+            bullets_by_norm.setdefault(norm_bullet, [])
+            if bullet not in bullets_by_norm[norm_bullet]:
+                bullets_by_norm[norm_bullet].append(bullet)
         for value in values:
-            if bullets:
-                present = value in bullet_set
-            else:
-                present = value in defs_combined
-            if not present:
+            norm_value = _normalize_match_text(value)
+            if not norm_value:
+                continue
+            candidates = bullets_by_norm.get(norm_value, [])
+            if bullets and not candidates:
                 issues.append(
                     f"Worksheet '{defs_ws.title}' Definition for '{header}' is missing value '{value}' from worksheet '{column_values_ws.title}'"
                 )
-    return issues
+                continue
+            if bullets and candidates:
+                matched, exact = _choose_match(value, candidates)
+                note = "" if exact else " (normalized match; text differs)"
+                mappings.append(f"Value map [{header}]: Column Values '{value}' -> Definition '{matched}'{note}")
+            elif not bullets:
+                defs_norm = _normalize_match_text(defs_combined)
+                if norm_value not in defs_norm:
+                    issues.append(
+                        f"Worksheet '{defs_ws.title}' Definition for '{header}' is missing value '{value}' from worksheet '{column_values_ws.title}'"
+                    )
+                else:
+                    mappings.append(
+                        f"Value map [{header}]: Column Values '{value}' -> Definition text match (normalized substring)"
+                    )
+    return issues, mappings
 
 
 def get_git_commit() -> str:
@@ -539,6 +624,9 @@ def trim_public_workbook(editor_path: Path, public_path: Path, logger: RunLogger
         ws.data_validations.dataValidation = []
         ws.conditional_formatting._cf_rules = {}
 
+    if "Version" in wb.sheetnames:
+        wb.active = wb.sheetnames.index("Version")
+
     wb.save(public_path)
     logger.info(f"Wrote {len(wb.sheetnames)} worksheet(s) to public file {public_path}")
 
@@ -583,7 +671,11 @@ def run(argv: Optional[Iterable[str]] = None) -> int:
     # fill in controlled vocabulary workseets
     apply_column_values(wb["Original Column Values"], reader, logger)
     apply_column_values(col_values_ws, reader, logger)
-    defs_issues = validate_column_definitions(vmr_ws, defs_ws, col_values_ws)
+    autofit_sheet_columns(wb["Original Column Values"])
+    autofit_sheet_columns(col_values_ws)
+    defs_issues, defs_mappings = validate_column_definitions(vmr_ws, defs_ws, col_values_ws)
+    for mapping in defs_mappings:
+        logger.info(mapping)
     if defs_issues:
         if args.keep_going:
             for issue in defs_issues:
@@ -718,6 +810,8 @@ def run(argv: Optional[Iterable[str]] = None) -> int:
     update_changelog(wb, msl_release, version_tag, [sys.argv[0], *sys.argv[1:]])
 
     # save full (editor) version 
+    if "Version" in wb.sheetnames:
+        wb.active = wb.sheetnames.index("Version")
     output_editor.parent.mkdir(parents=True, exist_ok=True)
     wb.save(output_editor)
     logger.info(f"Wrote workbook with {len(wb.sheetnames)} worksheet(s) to {output_editor}")
