@@ -172,6 +172,12 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         help="Must end with .editor.xlsx; writes FILEPATH.editor.xlsx and FILEPATH.xlsx",
     )
     parser.add_argument("-v", "--verbose", action="store_true", help="Verbose mode prints INFO/SUCCESS logs.")
+    parser.add_argument(
+        "-k",
+        "--keep-going",
+        action="store_true",
+        help="Treat Column definitions validation mismatches as warnings and continue.",
+    )
     return parser.parse_args(list(argv) if argv is not None else None)
 
 
@@ -230,6 +236,126 @@ def apply_column_values(ws, reader: DataSourceReader, logger: RunLogger) -> None
         for row_idx, value in enumerate(values, start=2):
             ws.cell(row=row_idx, column=col_idx).value = value
         logger.info(f"Wrote {len(values)} values to sheet '{ws.title}' column '{key}'")
+
+
+def _parse_heading_tokens(heading: str) -> List[str]:
+    return [part.strip() for part in heading.split(",") if part and part.strip()]
+
+
+def _extract_definition_bullets(text: str) -> List[str]:
+    bullets: List[str] = []
+    for line in text.splitlines():
+        match = re.match(r"^\s*-\s*(.+?)\s*$", line)
+        if match:
+            bullets.append(match.group(1).strip())
+    return bullets
+
+
+def validate_column_definitions(vmr_ws, defs_ws, column_values_ws) -> List[str]:
+    issues: List[str] = []
+    vmr_headers = header_map(vmr_ws)
+    editor_notes_col = vmr_headers.get("Editor Notes")
+    if not editor_notes_col:
+        issues.append(
+            f"Worksheet '{vmr_ws.title}' is missing 'Editor Notes' header needed for definitions validation"
+        )
+        return issues
+
+    defs_headers = header_map(defs_ws)
+    defs_col_col = defs_headers.get("Column")
+    defs_heading_col = defs_headers.get("Heading")
+    defs_definition_col = defs_headers.get("Definition")
+    if not all([defs_col_col, defs_heading_col, defs_definition_col]):
+        missing: List[str] = []
+        if not defs_col_col:
+            missing.append("Column")
+        if not defs_heading_col:
+            missing.append("Heading")
+        if not defs_definition_col:
+            missing.append("Definition")
+        issues.append(
+            f"Worksheet '{defs_ws.title}' missing required column(s) for validation: {', '.join(missing)}"
+        )
+        return issues
+
+    heading_to_defs: Dict[str, List[str]] = {}
+    range_dr_tokens: List[str] = []
+    found_dr_row = False
+    for r in range(2, defs_ws.max_row + 1):
+        column_text = str(defs_ws.cell(r, defs_col_col).value or "").strip()
+        heading_text = str(defs_ws.cell(r, defs_heading_col).value or "").strip()
+        definition_text = str(defs_ws.cell(r, defs_definition_col).value or "").strip()
+        if not column_text and not heading_text and not definition_text:
+            continue
+        tokens = _parse_heading_tokens(heading_text)
+        for token in tokens:
+            heading_to_defs.setdefault(token, [])
+            if definition_text:
+                heading_to_defs[token].append(definition_text)
+        if re.fullmatch(r"D\s*-\s*R", column_text):
+            found_dr_row = True
+            range_dr_tokens = tokens
+
+    # All VMR columns before "Editor Notes" must be documented in Column definitions.
+    vmr_required_headers: List[str] = []
+    for c in range(1, editor_notes_col):
+        value = vmr_ws.cell(1, c).value
+        header = str(value).strip() if value else ""
+        if header:
+            vmr_required_headers.append(header)
+    for header in vmr_required_headers:
+        if header not in heading_to_defs:
+            issues.append(
+                f"Worksheet '{defs_ws.title}' is missing documentation for VMR header '{header}' from worksheet '{vmr_ws.title}'"
+            )
+
+    # "Realm" through "Species" are documented via a single D-R row with CSV headings.
+    vmr_dr_headers: List[str] = []
+    for c in range(4, 19):  # D..R
+        value = vmr_ws.cell(1, c).value
+        header = str(value).strip() if value else ""
+        if header:
+            vmr_dr_headers.append(header)
+    if not found_dr_row:
+        issues.append(f"Worksheet '{defs_ws.title}' is missing the grouped 'D - R' row for Realm..Species headings")
+    else:
+        for header in vmr_dr_headers:
+            if header not in range_dr_tokens:
+                issues.append(
+                    f"Worksheet '{defs_ws.title}' D - R heading list is missing '{header}' from worksheet '{vmr_ws.title}'"
+                )
+
+    # Validate that each controlled value in Column Values appears in the matching Definition bullets.
+    col_values_headers = header_map(column_values_ws)
+    for header in COLUMN_VALUE_SOURCES:
+        vmr_col = vmr_headers.get(header)
+        cv_col = col_values_headers.get(header)
+        if not vmr_col or not cv_col:
+            continue
+        values: List[str] = []
+        for r in range(2, column_values_ws.max_row + 1):
+            value = str(column_values_ws.cell(r, cv_col).value or "").strip()
+            if value:
+                values.append(value)
+        defs_texts = heading_to_defs.get(header, [])
+        if not defs_texts:
+            issues.append(
+                f"Worksheet '{defs_ws.title}' has no Definition text for controlled-value header '{header}'"
+            )
+            continue
+        defs_combined = "\n".join(defs_texts)
+        bullets = _extract_definition_bullets(defs_combined)
+        bullet_set = set(bullets)
+        for value in values:
+            if bullets:
+                present = value in bullet_set
+            else:
+                present = value in defs_combined
+            if not present:
+                issues.append(
+                    f"Worksheet '{defs_ws.title}' Definition for '{header}' is missing value '{value}' from worksheet '{column_values_ws.title}'"
+                )
+    return issues
 
 
 def get_git_commit() -> str:
@@ -451,10 +577,22 @@ def run(argv: Optional[Iterable[str]] = None) -> int:
     # get main taxonony data worksheets
     vmr_ws = wb[vmr_sheet_name]
     original_ws = wb["Original"]
+    defs_ws = wb["Column definitions"]
+    col_values_ws = wb["Column Values"]
 
     # fill in controlled vocabulary workseets
     apply_column_values(wb["Original Column Values"], reader, logger)
-    apply_column_values(wb["Column Values"], reader, logger)
+    apply_column_values(col_values_ws, reader, logger)
+    defs_issues = validate_column_definitions(vmr_ws, defs_ws, col_values_ws)
+    if defs_issues:
+        if args.keep_going:
+            for issue in defs_issues:
+                logger.warning(issue)
+        else:
+            for issue in defs_issues:
+                logger.error(issue)
+            logger.write_errors_xlsx(output_editor)
+            return 1
 
     # pull latest taxonomy/isolate data from files/db
     vmr_rows = reader.read_table("vmr_export")
