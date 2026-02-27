@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
 #
-# Export VMR.xlsx for VMR_VMR40v2_20260122
+# Export VMR.xlsx for VMR_VMR40v2_20260223 (date VMR data hit prod website)
+#
+# (note: based on VMR_VMR40v2_20260202 file from VMR editor, plus post-hoc edits discussed over emails)
 #
 # exports from ICTVdatabase/data/ directory
 #
-DATA_SOURCE="./ICTVdatabase_20260122/data"
+DATA_SOURCE="./ICTVdatabase_20260223/data"
 DATA_MASK="../db_mask.tsv"
 TEMPLATE="VMRs/template-VMR_MSL40.v2.20251013.editor_dbs_20260202_v2.xlsx"
-OUTPUT="VMR_MSL40.v2.20260122.editor.xlsx"
+OUTPUT="VMR_MSL40.v2.20260223.editor.xlsx"
 EXPECTED="VMRs/template-VMR_MSL40.v2.20251013.editor_dbs_20260202_v2.xlsx"
 
 cat <<EOF
