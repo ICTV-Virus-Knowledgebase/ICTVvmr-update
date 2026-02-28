@@ -1,3 +1,6 @@
 [submodule "test_data/export/ICTVdatabase"]
 	path = test_data/export/ICTVdatabase
 	url = git@github.com:ICTV-Virus-Knowledgebase/ICTVdatabase.git
+[submodule "VMR_MSL40v2_20260223/ICTVdatabase_20260223"]
+	path = VMR_MSL40v2_20260223/ICTVdatabase_20260223
+	url = git@github.com:ICTV-Virus-Knowledgebase/ICTVvmr-update.git
