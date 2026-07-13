@@ -21,7 +21,7 @@ from openpyxl.utils import get_column_letter
 
 DEFAULT_WORKBOOK = (
     Path(__file__).resolve().parent
-    / "VMR_MSL40.v2.20251013.editor_dbs_20260202_v2.xlsx"
+    / "VMR_MSL41.v1.20260320.editor.formatted_dbs_v2.xlsx"
 )
 ERROR_FILENAME = "errors.xlsx"
 DELETES_FILENAME = "vmr_1_deletes.sql"
@@ -545,7 +545,7 @@ def read_tabular_file(path: Path, *, sheet_name: Optional[str] = None) -> pd.Dat
     suffix = path.suffix.lower()
     if suffix in {".csv", ".txt"}:
         sep = "\t" if suffix == ".txt" else ","
-        return pd.read_csv(path, sep=sep)
+        return pd.read_csv(path, sep=sep, escapechar="\\")
     if suffix in {".xlsx", ".xlsm", ".xls"}:
         return pd.read_excel(path, sheet_name=sheet_name, header=0, engine="openpyxl")
     raise ValueError(f"Unsupported file format for {path}")
