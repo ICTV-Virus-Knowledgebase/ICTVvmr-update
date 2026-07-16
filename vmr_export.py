@@ -161,7 +161,7 @@ class DataSourceReader:
             self.logger.warning(f"Flatfile not found for table '{table_name}': {path}")
             return []
         with path.open("r", encoding="utf-8", newline="") as handle:
-            rows = [dict(row) for row in csv.DictReader(handle, delimiter="\t")]
+            rows = [dict(row) for row in csv.DictReader(handle, delimiter="\t", escapechar="\\")]
         rows = self._apply_flatfile_masks(table_name, rows)
         self.logger.info(f"Read {len(rows)} rows from file {path}")
         return rows
