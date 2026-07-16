@@ -8,3 +8,7 @@
 	path = VMR_MSL41v1_20260320/MSL41v1
 	url = git@github.com:ICTV-Virus-Knowledgebase/ICTVdatabase.git
 	branch = main
+[submodule "VMR_MSL41v1.20260625/MSL41v1"]
+	path = VMR_MSL41v1.20260625/MSL41v1
+	url = git@github.com:ICTV-Virus-Knowledgebase/ICTVdatabase.git
+	branch = test
