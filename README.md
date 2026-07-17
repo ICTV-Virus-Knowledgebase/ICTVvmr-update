@@ -55,7 +55,7 @@ mkdir $REL_DIR
 
 2.  From the previous release directory:
 
-    1.  copy `template-VMR_MSL##v#.YYYYMMDD.editor.xlsx`
+    1.  copy `template-VMR_MSL##v#.YYYYMMDD.editor.xlsx` (the date comes from the day you receive the VMR xlsx)
 
         1.  updating the name to the current release
 
