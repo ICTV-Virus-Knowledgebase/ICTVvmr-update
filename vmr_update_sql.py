@@ -1990,7 +1990,7 @@ def write_sql_outputs(
         workbook_display, version, "CALL species_isolates_update_sorts();", warning_text
     )
     qc_sps_sql = build_procedure_sql_text(
-        workbook_display, version, "CALL QC_run_modules(:module_filter);", warning_text
+        workbook_display, version, "CALL QC_run_modules(NULL);", warning_text
     )
     deletes_path.write_text(deletes_sql, encoding="utf-8")
     updates_path.write_text(updates_sql, encoding="utf-8")
