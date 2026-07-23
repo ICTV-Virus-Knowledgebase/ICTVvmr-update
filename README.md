@@ -22,7 +22,35 @@ conda config --set channel_priority strict
 
 ## VMR update protocol
 
-Logan - can you write this?
+1. Backup species_isolates table using [utils/backup_species_isolates_table.sql](utils/backup_species_isolates_table.sql)
+    - [utils/run_backup_species_isolates_table.sh](utils/run_backup_species_isolates_table.sh) executes `backup_species_isolates_table.sql`
+    - This is useful if you are developing on the server where the test database lives
+
+2. Build and activate conda evironment
+    - ./create_conda_env_openpyxl3.sh
+    - conda activate ./conda/vmr_openpyxl3
+
+3. Get exports of VMR associated tables
+    - Follow steps 1-2 in `VMR export protocol` below to clone ICTVdatabase with the needed data files
+    - Or sftp the export files over
+
+4. Run vmr_update_sql.py
+    - python vmr_update_sql.py \
+        --vmr-export ~/ICTVdatabase/data/vmr_export.utf8.txt \
+        --taxonomy-genome-coverage ~/ICTVdatabase/data/taxonomy_genome_coverage.utf8.txt \
+        --taxonomy-molecule ~/ICTVdatabase/data/taxonomy_molecule.utf8.txt \
+        --taxonomy-host-source ~/ICTVdatabase/data/taxonomy_host_source.utf8.txt \
+        --keep-going
+    - Check ./errors.xlsx and follow up with authors
+
+5. Run generated .sql files on test database
+    - The generated files are `vmr_0_cv_inserts.sql`, `vmr_1_deletes.sql`, `vmr_2_update.sql`, `vmr_3_inserts.sql`, `vmr_4_update_sorts.sql`, and `vmr_5_exec_qc_sps.sql`
+    - `update_vmr_tables.sh` can take an input directory to run the generated sql to directly update the test database
+
+6. QC resulting database
+    - Check the output of `sp.QC_run_modules(NULL);` (this is the SQL inside `vmr_5_exec_qc_sps.sql`)
+    - IN the web browser look over the updates to make sure they are there
+
 
 ## VMR export protocol \*\*DRAFT\*\*
 
@@ -63,13 +91,7 @@ mkdir $REL_DIR
 
         3.  (if new MSL release) update name of `VMR MSL##`
 
-        4.  update `README.editor` worksheet, if changes have been made
-            to the current one
-
-        5.  replace `CHANGELOG.editor` with the one from the
-            VMR.editor.xlsx that was used for the update
-
-        6.  git add the template file
+        4. git add the template file
 
 3.  clone ICTVdatabase as a submodule in the new release dir named
     `VMR##v#`
@@ -88,13 +110,19 @@ mkdir $REL_DIR
 
     2.  `git add run_export.sh`
 
-5.  run the export
+5.  run the export, pointing at the previous release's `*.editor.xlsx`
+    so that `README.editor` and `CHANGELOG.editor` are copied forward
+    automatically:
 
     ``` bash
     conda activate ./conda//vmr_openpyxl
     cd ${REL_DIR}
-    ./run_export.sh
+    ./run_export.sh ../VMR_MSL##v#.YYYYMMDD/VMR_MSL##v#.YYYYMMDD.editor.xlsx
     ```
+
+    If `README.editor` needs actual content changes for this
+    release, edit that worksheet in the newly generated output
+    afterward
 
 6.  Double check the two (editor and public) sheets it will produce.
 
@@ -102,7 +130,7 @@ mkdir $REL_DIR
 
 1.  Enhance `vmr_export.py` so that we can give run_export.sh an
     argument pointing to the current editor .xlsx, and it will copy the
-    one or two worksheets over: `README.editor` , `CHANGELOG.editor`
+    one or two worksheets over: `README.editor` , `CHANGELOG.editor` [implemented]
 
 2.  Change `vmr_update_sql.py` and `vmr_export.py` to store
     `CHANGELOG.editor` rows in the in the db, and have a `vmr_toc` (or
