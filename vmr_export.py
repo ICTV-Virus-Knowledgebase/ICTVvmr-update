@@ -25,6 +25,7 @@ from openpyxl.formatting.rule import FormulaRule
 from openpyxl.styles import PatternFill, Font, Alignment
 from openpyxl.worksheet.datavalidation import DataValidation
 from openpyxl.utils import get_column_letter
+from copy import copy
 
 DEFAULT_DATA_SOURCE = "test_data/export/ICTVdatabase/data"
 DEFAULT_TEMPLATE = "test_data/export/template-VMR.editor.xlsx"
@@ -273,6 +274,17 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         action="store_true",
         help="Treat Column definitions validation mismatches as warnings and continue.",
     )
+    parser.add_argument(
+    "--copy-from-editor",
+    help="Path to the previous release's *.editor.xlsx. If given, worksheets in "
+         "--copy-sheets are copied from it into the output, overwriting the template's versions.",
+    )
+    parser.add_argument(
+        "--copy-sheets",
+        nargs="+",
+        default=["README.editor", "CHANGELOG.editor"],
+        help="Worksheet names to copy from --copy-from-editor (default: README.editor CHANGELOG.editor).",
+    )
     return parser.parse_args(list(argv) if argv is not None else None)
 
 
@@ -346,6 +358,28 @@ def autofit_sheet_columns(ws, max_width: int = 80) -> None:
                 max_len = cell_len
         width = min(max_width, max(8, max_len + 2))
         ws.column_dimensions[get_column_letter(col_idx)].width = width
+
+def copy_sheet_contents(source_ws, target_ws) -> None:
+    """Copy values, styles, merged cells, column widths, and row heights between worksheets."""
+    for row in source_ws.iter_rows():
+        for cell in row:
+            new_cell = target_ws.cell(row=cell.row, column=cell.column, value=cell.value)
+            if cell.has_style:
+                new_cell.font = copy(cell.font)
+                new_cell.border = copy(cell.border)
+                new_cell.fill = copy(cell.fill)
+                new_cell.number_format = cell.number_format
+                new_cell.protection = copy(cell.protection)
+                new_cell.alignment = copy(cell.alignment)
+
+    for merged_range in source_ws.merged_cells.ranges:
+        target_ws.merge_cells(str(merged_range))
+
+    for col_letter, dim in source_ws.column_dimensions.items():
+        target_ws.column_dimensions[col_letter].width = dim.width
+
+    for idx, dim in source_ws.row_dimensions.items():
+        target_ws.row_dimensions[idx].height = dim.height
 
 
 def _parse_heading_tokens(heading: str) -> List[str]:
@@ -756,6 +790,25 @@ def run(argv: Optional[Iterable[str]] = None) -> int:
     if vmr_sheet_name is None:
         logger.write_errors_xlsx(output_editor)
         return 1
+
+    # Optionally carry forward hand-maintained worksheets (README.editor, CHANGELOG.editor)
+    # from a previous release's editor workbook, overwriting the template's copies.
+    # This replaces the manual copy/paste step described in the README export protocol.
+    if args.copy_from_editor:
+        source_path = Path(args.copy_from_editor)
+        if not source_path.exists():
+            return fail(f"--copy-from-editor file not found: {source_path}")
+        source_wb = load_workbook(source_path)
+        for sheet_name in args.copy_sheets:
+            if sheet_name not in source_wb.sheetnames:
+                logger.warning(f"Sheet '{sheet_name}' not found in {source_path}, skipping copy")
+                continue
+        idx = wb.sheetnames.index(sheet_name) if sheet_name in wb.sheetnames else None
+        if sheet_name in wb.sheetnames:
+            del wb[sheet_name]
+        target_ws = wb.create_sheet(sheet_name, index=idx)
+        copy_sheet_contents(source_wb[sheet_name], target_ws)
+        logger.info(f"Copied worksheet '{sheet_name}' from {source_path}")
 
     # get main taxonony data worksheets
     vmr_ws = wb[vmr_sheet_name]
